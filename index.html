@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hakver — Tasarım Sistemi Önizleme</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --primary: #7C5CFC;
+  --primary-hover: #6A4DE8;
+  --primary-light: #EDE8FF;
+  --secondary: #6B7280;
+  --accent: #A78BFA;
+  --accent-light: #F3F0FF;
+  --success: #22C55E;
+  --success-light: #F0FDF4;
+  --success-border: #BBF7D0;
+  --danger: #F87171;
+  --danger-light: #FEF2F2;
+  --danger-border: #FECACA;
+  --bg: #FAFAF8;
+  --surface: #FFFFFF;
+  --border: #E5E7EB;
+  --text-primary: #1F2937;
+  --text-secondary: #9CA3AF;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.04);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --transition: 150ms ease-in-out;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Nunito', sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Container */
+.container { max-width: 1024px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 1024px) { .container { padding: 0 32px; } }
+
+/* Header */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.header-inner { display: flex; align-items: center; justify-content: space-between; }
+.logo { font-size: 24px; font-weight: 700; color: var(--primary); text-decoration: none; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 16px; border-radius: var(--radius); font-family: 'Nunito', sans-serif;
+  font-size: 14px; font-weight: 600; cursor: pointer; border: none;
+  transition: all var(--transition); text-decoration: none;
+}
+.btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn-secondary { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+.btn-secondary:hover { background: var(--primary-light); }
+.btn-ghost { background: transparent; color: var(--text-secondary); }
+.btn-ghost:hover { background: var(--accent-light); color: var(--primary); }
+.btn-success { background: transparent; color: var(--success); border: 1px solid var(--success); }
+.btn-success:hover { background: var(--success-light); }
+.btn-success.active { background: var(--success); color: white; }
+.btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.btn-danger:hover { background: var(--danger-light); }
+.btn-danger.active { background: var(--danger); color: white; }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-lg { padding: 12px 24px; font-size: 16px; }
+
+/* Badges */
+.badge {
+  display: inline-flex; align-items: center; padding: 2px 8px;
+  border-radius: var(--radius-sm); font-size: 12px; font-weight: 600;
+}
+.badge-primary { background: var(--primary-light); color: var(--primary); }
+.badge-success { background: var(--success-light); color: var(--success); }
+.badge-danger { background: var(--danger-light); color: var(--danger); }
+.badge-secondary { background: #F3F4F6; color: var(--secondary); }
+
+/* Cards */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 16px; transition: box-shadow var(--transition);
+}
+.card:hover { box-shadow: var(--shadow-md); }
+
+/* Inputs */
+.input-group { display: flex; flex-direction: column; gap: 4px; }
+.input-label { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.input {
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: 'Nunito', sans-serif; font-size: 14px; color: var(--text-primary);
+  transition: border-color var(--transition); background: var(--surface); width: 100%;
+}
+.input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.input::placeholder { color: var(--text-secondary); }
+.textarea { resize: vertical; min-height: 100px; }
+
+/* Avatar */
+.avatar {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--primary-light);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; color: var(--primary); font-size: 16px; flex-shrink: 0;
+}
+.avatar-sm { width: 32px; height: 32px; font-size: 13px; }
+.avatar-lg { width: 56px; height: 56px; font-size: 22px; }
+.avatar-anon { background: #FEF3C7; color: #D97706; }
+
+/* Topic Card */
+.topic-card { display: flex; flex-direction: column; gap: 12px; }
+.topic-header { display: flex; align-items: center; gap: 10px; }
+.topic-user-info { display: flex; flex-direction: column; }
+.topic-username { font-size: 14px; font-weight: 600; }
+.topic-meta { font-size: 12px; color: var(--text-secondary); }
+.topic-rank { font-size: 11px; color: var(--accent); font-weight: 600; }
+.topic-title { font-size: 18px; font-weight: 700; line-height: 1.3; }
+.topic-content { font-size: 14px; color: var(--text-primary); line-height: 1.6; }
+.topic-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* Vote Section */
+.vote-section { display: flex; gap: 8px; align-items: center; }
+.vote-bar { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; min-width: 120px; }
+.vote-bar-fill { height: 100%; background: linear-gradient(90deg, var(--success), var(--success)); border-radius: 4px; transition: width 300ms ease; }
+.vote-count { font-size: 13px; font-weight: 600; }
+.vote-count-success { color: var(--success); }
+.vote-count-danger { color: var(--danger); }
+
+/* Comment */
+.comment { display: flex; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border); }
+.comment-body { flex: 1; }
+.comment-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.comment-username { font-size: 13px; font-weight: 600; }
+.comment-time { font-size: 12px; color: var(--text-secondary); }
+.comment-text { font-size: 14px; line-height: 1.5; }
+.comment-actions { display: flex; gap: 12px; margin-top: 6px; }
+.comment-action { font-size: 12px; color: var(--text-secondary); cursor: pointer; background: none; border: none; font-family: 'Nunito'; transition: color var(--transition); }
+.comment-action:hover { color: var(--primary); }
+.comment-reply { margin-left: 42px; }
+
+/* Notification Badge */
+.notif-badge {
+  position: relative; display: inline-flex;
+}
+.notif-dot {
+  position: absolute; top: -4px; right: -4px; width: 18px; height: 18px;
+  background: var(--danger); color: white; border-radius: 50%;
+  font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--surface);
+}
+
+/* Section */
+.section { padding: 24px 0; }
+.section-title { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
+.section-subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; }
+
+/* Category Chips */
+.chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.chip {
+  padding: 6px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary);
+  cursor: pointer; white-space: nowrap; transition: all var(--transition);
+}
+.chip:hover { border-color: var(--primary); color: var(--primary); }
+.chip.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* Alert */
+.alert {
+  padding: 12px 16px; border-radius: var(--radius); font-size: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.alert-success { background: var(--success-light); color: #166534; border: 1px solid var(--success-border); }
+.alert-danger { background: var(--danger-light); color: #991B1B; border: 1px solid var(--danger-border); }
+.alert-info { background: var(--primary-light); color: #4338CA; border: 1px solid #C7D2FE; }
+
+/* Toggle Switch */
+.switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.switch input { display: none; }
+.switch-track {
+  width: 44px; height: 24px; background: var(--border); border-radius: 12px;
+  position: relative; transition: background var(--transition);
+}
+.switch input:checked + .switch-track { background: var(--primary); }
+.switch-thumb {
+  width: 20px; height: 20px; background: white; border-radius: 50%;
+  position: absolute; top: 2px; left: 2px; transition: transform var(--transition);
+  box-shadow: var(--shadow-sm);
+}
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(20px); }
+.switch-label { font-size: 14px; }
+
+/* Profile */
+.profile-header { display: flex; align-items: center; gap: 16px; padding: 24px 0; }
+.profile-info { flex: 1; }
+.profile-name { font-size: 20px; font-weight: 700; }
+.profile-username { font-size: 14px; color: var(--text-secondary); }
+.profile-bio { font-size: 14px; margin-top: 4px; }
+.profile-stats { display: flex; gap: 16px; margin-top: 8px; }
+.profile-stat { font-size: 13px; color: var(--text-secondary); }
+.profile-stat strong { color: var(--text-primary); }
+
+/* Tabs */
+.tabs { display: flex; border-bottom: 1px solid var(--border); gap: 0; }
+.tab {
+  padding: 10px 16px; font-size: 14px; font-weight: 600; color: var(--text-secondary);
+  border-bottom: 2px solid transparent; cursor: pointer; background: none; border-top: none;
+  border-left: none; border-right: none; font-family: 'Nunito'; transition: all var(--transition);
+}
+.tab:hover { color: var(--text-primary); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* Anon Card */
+.anon-card { background: #FFFBEB; }
+.anon-card .topic-header .avatar { background: #FEF3C7; color: #D97706; }
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none;
+  align-items: center; justify-content: center; z-index: 100; padding: 16px;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-md);
+  padding: 24px; max-width: 440px; width: 100%;
+}
+.modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* Skeleton */
+.skeleton { background: linear-gradient(90deg, #F3F4F6 25%, #E5E7EB 50%, #F3F4F6 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius-sm); }
+.skeleton-text { height: 14px; width: 80%; margin-bottom: 8px; }
+.skeleton-title { height: 20px; width: 60%; margin-bottom: 12px; }
+.skeleton-avatar { width: 40px; height: 40px; border-radius: 50%; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Empty State */
+.empty-state { text-align: center; padding: 48px 16px; color: var(--text-secondary); }
+.empty-state-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+.empty-state-desc { font-size: 14px; margin-bottom: 16px; }
+
+/* Restriction Banner */
+.restriction-banner {
+  background: #FEF3C7; border: 1px solid #FDE68A; border-radius: var(--radius);
+  padding: 10px 16px; font-size: 13px; color: #92400E; display: flex; align-items: center; gap: 8px;
+}
+
+/* Mobile Nav */
+.mobile-nav {
+  position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface);
+  border-top: 1px solid var(--border); display: flex; justify-content: space-around;
+  padding: 8px 0 12px; z-index: 50;
+}
+.mobile-nav-item {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 10px; color: var(--text-secondary); text-decoration: none;
+  transition: color var(--transition);
+}
+.mobile-nav-item.active { color: var(--primary); }
+.mobile-nav-icon { font-size: 20px; }
+
+@media (min-width: 640px) { .mobile-nav { display: none; } }
+
+/* Footer space for mobile nav */
+.footer-space { height: 72px; }
+@media (min-width: 640px) { .footer-space { height: 0; } }
+
+/* Grid */
+.grid-2 { display: grid; gap: 16px; }
+@media (min-width: 640px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+
+/* Utilities */
+.mt-4 { margin-top: 16px; }
+.mt-6 { margin-top: 24px; }
+.mb-4 { margin-bottom: 16px; }
+.gap-3 { gap: 12px; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.text-sm { font-size: 13px; }
+.text-secondary { color: var(--text-secondary); }
+.font-semibold { font-weight: 600; }
+.edited-tag { font-size: 11px; color: var(--text-secondary); background: #F3F4F6; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="container header-inner">
+    <a href="#" class="logo">hakver</a>
+    <div class="header-actions">
+      <span class="notif-badge">
+        <button class="btn btn-ghost btn-sm">🔔</button>
+        <span class="notif-dot">3</span>
+      </span>
+      <div class="avatar avatar-sm">BK</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- CATEGORY CHIPS -->
+  <div class="section">
+    <div class="chips">
+      <button class="chip active">Tümü</button>
+      <button class="chip">Genel</button>
+      <button class="chip">İlişkiler</button>
+      <button class="chip">Yaşam</button>
+      <button class="chip">İş & Kariyer</button>
+    </div>
+  </div>
+
+  <!-- ALERTS -->
+  <div class="section" style="padding-top: 0;">
+    <div class="section-title">Uyarılar</div>
+    <div class="flex flex-col gap-3">
+      <div class="alert alert-success">✅ Email adresiniz doğrulandı.</div>
+      <div class="alert alert-danger">⚠️ Yorum yapma yetkiniz 15 Mayıs'a kadar kısıtlanmıştır.</div>
+      <div class="alert alert-info">ℹ️ Kullanım koşulları güncellendi, lütfen onaylayın.</div>
+    </div>
+  </div>
+
+  <!-- TOPIC CARD — NORMAL -->
+  <div class="section">
+    <div class="section-title">Konu Kartları</div>
+    <div class="flex flex-col gap-3">
+
+      <div class="card topic-card">
+        <div class="topic-header">
+          <div class="avatar">BK</div>
+          <div class="topic-user-info">
+            <span class="topic-username">burakkurt</span>
+            <span class="topic-rank">⭐ Aktif Üye</span>
+          </div>
+          <span class="topic-meta" style="margin-left:auto;">2 saat önce</span>
+        </div>
+        <div class="topic-title">Komşum her gece 23:00'den sonra müzik açıyor, uyarınca bana kızdı</div>
+        <div class="topic-content">3 aydır aynı sorun devam ediyor. Defalarca kibarca uyardım ama her seferinde "ev benim istediğimi yaparım" diyor. Dün gece tekrar uyardığımda kapıyı yüzüme kapattı. Apartman yönetimine şikayet ettim, haklı mıyım?</div>
+        <div class="topic-footer">
+          <div class="badge badge-secondary">Yaşam</div>
+          <div class="vote-section">
+            <button class="btn btn-success btn-sm active">👍 Haklı</button>
+            <span class="vote-count vote-count-success">847</span>
+            <div class="vote-bar"><div class="vote-bar-fill" style="width: 73%"></div></div>
+            <span class="vote-count vote-count-danger">312</span>
+            <button class="btn btn-danger btn-sm">👎 Haksız</button>
+          </div>
+        </div>
+        <div class="topic-footer">
+          <span class="text-sm text-secondary">💬 124 yorum</span>
+          <span class="text-sm text-secondary">📤 Paylaş</span>
+        </div>
+      </div>
+
+      <!-- TOPIC CARD — ANONYMOUS -->
+      <div class="card topic-card anon-card">
+        <div class="topic-header">
+          <div class="avatar avatar-anon">🐧</div>
+          <div class="topic-user-info">
+            <span class="topic-username">Anonim Penguen #4521</span>
+          </div>
+          <span class="topic-meta" style="margin-left:auto;">5 saat önce</span>
+        </div>
+        <div class="topic-title">Arkadaşımın düğününe gitmek istemiyorum ama söyleyemiyorum</div>
+        <div class="topic-content">10 yıllık arkadaşım ama son 2 yıldır hiç görüşmüyoruz. Düğününe davet etti, gitmek istemiyorum ama kırmaktan korkuyorum...</div>
+        <div class="topic-footer">
+          <div class="badge badge-secondary">İlişkiler</div>
+          <div class="vote-section">
+            <button class="btn btn-success btn-sm">👍 Haklı</button>
+            <span class="vote-count vote-count-success">234</span>
+            <div class="vote-bar"><div class="vote-bar-fill" style="width: 58%"></div></div>
+            <span class="vote-count vote-count-danger">169</span>
+            <button class="btn btn-danger btn-sm active">👎 Haksız</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TOPIC CARD — EDITED -->
+      <div class="card topic-card">
+        <div class="topic-header">
+          <div class="avatar" style="background:#DBEAFE;color:#2563EB;">SA</div>
+          <div class="topic-user-info">
+            <span class="topic-username">serapaydin</span>
+            <span class="topic-rank">⭐ Deneyimli</span>
+          </div>
+          <span class="edited-tag">düzenlendi</span>
+          <span class="topic-meta" style="margin-left:auto;">1 gün önce</span>
+        </div>
+        <div class="topic-title">İş yerinde herkes öğle yemeğine çıkıyor ben çıkmıyorum, antisosyal mi oluyorum?</div>
+        <div class="topic-content">Öğle arasında kendi işlerimle ilgilenmeyi tercih ediyorum. Ama ekipten biri "takım ruhunu bozuyorsun" dedi...</div>
+        <div class="topic-footer">
+          <div class="badge badge-secondary">İş & Kariyer</div>
+          <span class="vote-count vote-count-success">👍 512</span>
+          <span class="vote-count vote-count-danger">👎 203</span>
+          <span class="text-sm text-secondary">💬 89 yorum</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- COMMENTS -->
+  <div class="section">
+    <div class="section-title">Yorumlar</div>
+    <div class="card">
+      <div class="comment" style="border-top:none;">
+        <div class="avatar avatar-sm">MK</div>
+        <div class="comment-body">
+          <div class="comment-header">
+            <span class="comment-username">mehmetk</span>
+            <span class="badge badge-primary" style="font-size:10px;">Uzman</span>
+            <span class="comment-time">45 dk önce</span>
+          </div>
+          <div class="comment-text">Kesinlikle haklısın. Gece 23:00'den sonra gürültü yapmak yasalara aykırı. Apartman yönetimine yazılı dilekçe ver, gerekirse zabıtayı ara.</div>
+          <div class="comment-actions">
+            <button class="comment-action">❤️ 23</button>
+            <button class="comment-action">💬 Yanıtla</button>
+            <button class="comment-action">🚩 Rapor Et</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Reply (Level 2) -->
+      <div class="comment comment-reply">
+        <div class="avatar avatar-sm avatar-anon">🦊</div>
+        <div class="comment-body">
+          <div class="comment-header">
+            <span class="comment-username">Anonim Tilki #7832</span>
+            <span class="comment-time">30 dk önce</span>
+          </div>
+          <div class="comment-text"><strong>@mehmetk</strong> Katılıyorum ama önce bir kez daha konuşmasını öneririm. Direkt zabıta aramak ilişkiyi tamamen koparır.</div>
+          <div class="comment-actions">
+            <button class="comment-action">❤️ 8</button>
+            <button class="comment-action">💬 Yanıtla</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Deleted comment -->
+      <div class="comment">
+        <div class="avatar avatar-sm" style="background:#F3F4F6;color:#9CA3AF;">?</div>
+        <div class="comment-body">
+          <div class="comment-text text-secondary" style="font-style:italic;">Bu yorum silindi.</div>
+        </div>
+      </div>
+
+      <!-- Comment with edit tag -->
+      <div class="comment">
+        <div class="avatar avatar-sm" style="background:#FCE7F3;color:#DB2777;">AY</div>
+        <div class="comment-body">
+          <div class="comment-header">
+            <span class="comment-username">ayseyilmaz</span>
+            <span class="badge badge-primary" style="font-size:10px;">Üye</span>
+            <span class="edited-tag">düzenlendi</span>
+            <span class="comment-time">1 saat önce</span>
+          </div>
+          <div class="comment-text">Ben de aynısını yaşadım. Sonunda taşındım, en iyi karar 😅</div>
+          <div class="comment-actions">
+            <button class="comment-action">❤️ 45</button>
+            <button class="comment-action">💬 Yanıtla</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILE -->
+  <div class="section">
+    <div class="section-title">Profil</div>
+    <div class="card">
+      <div class="profile-header">
+        <div class="avatar avatar-lg">BK</div>
+        <div class="profile-info">
+          <div class="profile-name">B. K.</div>
+          <div class="profile-username">@burakkurt</div>
+          <div class="profile-bio">Yazılım geliştirici. Adalet meraklısı.</div>
+          <div class="profile-stats">
+            <span class="profile-stat"><strong>24</strong> konu</span>
+            <span class="profile-stat"><strong>156</strong> yorum</span>
+            <span class="profile-stat"><strong>1,240</strong> XP</span>
+          </div>
+        </div>
+        <div class="badge badge-primary">⭐ Deneyimli</div>
+      </div>
+      <div class="tabs">
+        <button class="tab active">Konular</button>
+        <button class="tab">Oylar</button>
+        <button class="tab">Yorumlar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FORM ELEMENTS -->
+  <div class="section">
+    <div class="section-title">Form Elemanları</div>
+    <div class="card">
+      <div class="flex flex-col gap-3">
+        <div class="input-group">
+          <label class="input-label">Konu Başlığı</label>
+          <input class="input" type="text" placeholder="Başlığınızı yazın..." maxlength="150">
+        </div>
+        <div class="input-group">
+          <label class="input-label">Açıklama</label>
+          <textarea class="input textarea" placeholder="Olayınızı detaylı anlatın..."></textarea>
+        </div>
+        <div class="input-group">
+          <label class="input-label">Kategori</label>
+          <select class="input">
+            <option>Kategori seçin</option>
+            <option>Genel</option>
+            <option>İlişkiler</option>
+            <option>Yaşam</option>
+          </select>
+        </div>
+        <label class="switch">
+          <input type="checkbox">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+          <span class="switch-label">Anonim olarak paylaş</span>
+        </label>
+        <div class="flex" style="gap:8px;">
+          <button class="btn btn-primary">Paylaş</button>
+          <button class="btn btn-secondary">İptal</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUTTONS -->
+  <div class="section">
+    <div class="section-title">Butonlar</div>
+    <div class="card">
+      <div class="flex flex-col gap-3">
+        <div class="flex items-center" style="gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-lg">Primary Large</button>
+          <button class="btn btn-primary">Primary</button>
+          <button class="btn btn-primary btn-sm">Primary Small</button>
+        </div>
+        <div class="flex items-center" style="gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-secondary">Secondary</button>
+          <button class="btn btn-ghost">Ghost</button>
+        </div>
+        <div class="flex items-center" style="gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-success">👍 Haklı</button>
+          <button class="btn btn-success active">👍 Haklı (aktif)</button>
+          <button class="btn btn-danger">👎 Haksız</button>
+          <button class="btn btn-danger active">👎 Haksız (aktif)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BADGES -->
+  <div class="section">
+    <div class="section-title">Badge'ler</div>
+    <div class="card">
+      <div class="flex items-center" style="gap:8px;flex-wrap:wrap;">
+        <span class="badge badge-primary">⭐ Aktif Üye</span>
+        <span class="badge badge-success">Haklı</span>
+        <span class="badge badge-danger">Haksız</span>
+        <span class="badge badge-secondary">Genel</span>
+        <span class="badge badge-secondary">İlişkiler</span>
+        <span class="edited-tag">düzenlendi</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- SKELETON LOADING -->
+  <div class="section">
+    <div class="section-title">Yükleniyor (Skeleton)</div>
+    <div class="card">
+      <div class="flex items-center" style="gap:10px;margin-bottom:12px;">
+        <div class="skeleton skeleton-avatar"></div>
+        <div style="flex:1;">
+          <div class="skeleton skeleton-text" style="width:30%;"></div>
+          <div class="skeleton skeleton-text" style="width:20%;height:10px;"></div>
+        </div>
+      </div>
+      <div class="skeleton skeleton-title"></div>
+      <div class="skeleton skeleton-text"></div>
+      <div class="skeleton skeleton-text" style="width:60%;"></div>
+    </div>
+  </div>
+
+  <!-- EMPTY STATE -->
+  <div class="section">
+    <div class="section-title">Boş Durum</div>
+    <div class="card">
+      <div class="empty-state">
+        <div class="empty-state-icon">📭</div>
+        <div class="empty-state-title">Henüz konu paylaşılmamış</div>
+        <div class="empty-state-desc">İlk konuyu siz açın ve topluluğun fikrini alın!</div>
+        <button class="btn btn-primary">Konu Aç</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESTRICTION BANNER -->
+  <div class="section">
+    <div class="section-title">Kısıtlama Bildirimi</div>
+    <div class="restriction-banner">
+      ⚠️ <span>Yorum yapma yetkiniz <strong>"Uygunsuz İçerik"</strong> nedeniyle <strong>15 Mayıs 2026</strong> tarihine kadar kısıtlanmıştır.</span>
+    </div>
+  </div>
+
+  <!-- MODAL -->
+  <div class="section">
+    <div class="section-title">Modal / Dialog</div>
+    <button class="btn btn-primary" onclick="document.getElementById('modal').classList.add('show')">Rapor Et Modal'ını Aç</button>
+  </div>
+
+  <div class="footer-space"></div>
+</main>
+
+<!-- MOBILE NAV -->
+<nav class="mobile-nav">
+  <a href="#" class="mobile-nav-item active">
+    <span class="mobile-nav-icon">🏠</span>
+    Ana Sayfa
+  </a>
+  <a href="#" class="mobile-nav-item">
+    <span class="mobile-nav-icon">🔍</span>
+    Keşfet
+  </a>
+  <a href="#" class="mobile-nav-item">
+    <span class="mobile-nav-icon">➕</span>
+    Konu Aç
+  </a>
+  <a href="#" class="mobile-nav-item">
+    <span class="mobile-nav-icon">🔔</span>
+    Bildirimler
+  </a>
+  <a href="#" class="mobile-nav-item">
+    <span class="mobile-nav-icon">👤</span>
+    Profil
+  </a>
+</nav>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title">İçeriği Rapor Et</div>
+    <div class="flex flex-col gap-3">
+      <div class="input-group">
+        <label class="input-label">Kategori</label>
+        <select class="input">
+          <option>Uygunsuz İçerik</option>
+          <option>Spam / Reklam</option>
+          <option>Kişisel Bilgi İhlali</option>
+          <option>Yanıltıcı İçerik</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label class="input-label">Açıklama (opsiyonel)</label>
+        <textarea class="input textarea" rows="3" placeholder="Detay ekleyin..."></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="document.getElementById('modal').classList.remove('show')">İptal</button>
+      <button class="btn btn-primary" onclick="document.getElementById('modal').classList.remove('show')">Rapor Et</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
