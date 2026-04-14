@@ -24,12 +24,7 @@ Detect security, architecture, and quality issues in changes. Every finding must
 
 ## 2. Code Structure and Quality
 
-- Professional folder structure and file organization
-- Meaningful file, variable, and method names
-- Responsibilities split into components/modules instead of hundreds of lines in one file
-- No dead code, unused imports, or leftover artifacts
-- Sustainable, readable, and performant code
-- TypeScript strict compliance
+- Full compliance with `.claude/rules/coding-standards.md`
 
 ## 3. Architectural Compliance
 
