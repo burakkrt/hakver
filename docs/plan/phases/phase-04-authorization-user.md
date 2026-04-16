@@ -63,6 +63,17 @@ Under `apps/api/src/common/guards/`:
 - `@RequireVerified()` — Email verification required
 - `@CurrentUser()` — User object from request
 
+### 2.1. Profile Completion Guard
+
+**`profile-complete.guard.ts`** — Checks that the user's profile is complete before allowing write actions. Required fields: `username`, `firstName`, `lastName`.
+
+- Applied to all endpoints that create or modify content (topic create, comment create, vote create)
+- Returns 403 with `{ code: "USER_PROFILE_INCOMPLETE", message: "Devam etmek için profilinizi tamamlayın", requiredFields: ["username", "firstName", "lastName"] }` if any required field is null/empty
+- Works alongside existing guards: JWT → Verified → ProfileComplete → Restriction → Permission
+- Decorator: `@RequireCompleteProfile()` — applied on write endpoints
+
+This is critical for OAuth users who may register with incomplete data (Google OAuth provides email but username is set later via profile completion).
+
 ### 3. User Module
 
 Under `apps/api/src/modules/user/`:
@@ -90,6 +101,7 @@ user/
 | GET | /users/:username/topics | Public | Topics created by the user |
 | GET | /users/:username/votes | JWT (self only) | Topics the user voted on |
 | GET | /users/:username/comments | Public | Topics the user commented on |
+| GET | /users/me/profile-status | JWT | Profile completion status (which fields are missing) |
 | GET | /avatars | Public | Available avatar list |
 
 ### 5. Profile Viewing Privacy Rules

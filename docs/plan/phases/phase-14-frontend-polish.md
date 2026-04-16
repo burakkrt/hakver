@@ -40,6 +40,8 @@
 - COMMENT_LIKED: "[Actor] yorumunuzu beğendi" → /topics/:slug
 - COMMENT_REPLIED: "[Actor] yorumunuza yanıt verdi" → /topics/:slug
 
+**Note:** Notifications older than 90 days are automatically cleaned up by the backend cron job (Phase 10). The frontend doesn't need to handle this — it simply fetches whatever notifications exist.
+
 ### 3. Header Notification Icon
 
 Notification icon in the header:
@@ -249,4 +251,5 @@ cd apps/web && pnpm build
 - [ ] Empty states for all empty conditions
 - [ ] Accessibility: Lighthouse a11y score 90+
 - [ ] Responsive: no breakage on mobile/tablet/desktop
+- [ ] Search results page works with relevant results
 - [ ] `pnpm build` passes without errors

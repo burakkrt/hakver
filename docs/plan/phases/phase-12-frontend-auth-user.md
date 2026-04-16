@@ -58,7 +58,7 @@ Form with React Hook Form + Zod (shared schema):
 - Date of birth: date picker (13-year age check on client-side)
 - Gender: radio group (Erkek, Kadın, Belirtmek İstemiyorum)
 - Client-side form validation + server error display
-- Successful registration → update auth store → redirect to consent screen
+- Successful registration → update auth store → redirect to consent screen → after consent → redirect to email verification → after verification → redirect to home page. The order is: Register → Consent → Email Verification → Home.
 - "Google ile Kayıt Ol" button
 - Bottom: "Zaten hesabınız var mı? Giriş yapın" link
 
@@ -96,6 +96,10 @@ For users who signed in via OAuth and haven't set a username yet:
 - Gender selection
 - Date of birth
 - On success → redirect to consent screen or home page
+
+**Important:** Profile completion is not just for OAuth users. Any user with missing required fields (username, firstName, lastName) is redirected here. The page checks which fields are missing and only shows those fields.
+
+This page is also triggered when a user with an incomplete profile attempts a write action (create topic, comment, vote) — the auth guard intercepts and redirects here with a return URL, so the user is sent back to their original action after completing their profile.
 
 ### 8. Consent Screen
 
@@ -162,7 +166,10 @@ Sections:
 - `/terms-of-service` → Kullanım Koşulları full text
 - `/privacy-policy` → Gizlilik Politikası full text
 - `/community-guidelines` → Topluluk Kuralları full text
-- `/reset-password` → Password reset page (with token, email address entry + new password setting)
+- `/reset-password` → Two-step password reset page:
+  - **Step 1 (no token in URL):** Email input form → "Şifre sıfırlama bağlantısı gönder" button. On success: "Email adresinize şifre sıfırlama bağlantısı gönderildi" message.
+  - **Step 2 (token in URL query `?token=xxx`):** New password form (password + confirm password). On success: "Şifreniz başarıyla değiştirildi" + redirect to login page.
+  - The page checks for `token` query parameter to decide which step to show.
 
 Text content is fetched from the database (`ConsentVersion` table). Rendered with Server Component via SSR.
 
@@ -172,6 +179,7 @@ Text content is fetched from the database (`ConsentVersion` table). Rendered wit
 - Client component, checks state from auth store
 - Not logged in → redirect to `/login`
 - Not verified → redirect to `/verify-email`
+- Profile incomplete (missing username/firstName/lastName) → redirect to `/complete-profile` (with return URL)
 - Profile not completed → redirect to `/complete-profile`
 - Consent not accepted → show consent modal
 

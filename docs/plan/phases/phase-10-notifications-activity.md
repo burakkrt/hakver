@@ -174,6 +174,24 @@ interface ActivityLogData {
 
 **IP and User-Agent:** Taken from the request via `req.ip` and `req.headers['user-agent']`. Can be automatically added via NestJS interceptor.
 
+### 9.1. Data Retention Policy
+
+**Activity logs — tiered retention:**
+- **Regular activity logs** (profile update, login, topic/comment create/edit): **90 days** retention. Older records are automatically deleted.
+- **Security & moderation logs** (restriction apply/remove, report create/review, block/unblock, account deletion, failed login attempts): **1 year** retention. Required for legal investigations and compliance (KVKK).
+- **Authentication logs** (login, logout, token refresh, password change): **1 year** retention. Required for fraud/abuse investigation.
+
+**Implementation:** A scheduled cron job (`@nestjs/schedule`) runs daily at 03:00 AM:
+1. Delete regular activity logs older than 90 days
+2. Delete security/moderation logs older than 1 year
+3. Log the cleanup count for monitoring
+
+The `action` field in the `ActivityLog` table is used to classify log type. Security/moderation actions: `restriction:*`, `report:*`, `block:*`, `account:delete`, `auth:login-failed`. Everything else is regular.
+
+**Notification retention:**
+- Notifications older than 90 days are automatically deleted by the same cron job
+- This prevents the `Notification` table from growing unboundedly
+
 ### 10. Topic Detail Response Update
 
 Add `isMuted` field to the `GET /topics/:id` response created in Phase 5:
@@ -251,4 +269,5 @@ GET /admin/activity-logs (normal user) → 403
 - [ ] Anonymous notifications display correctly
 - [ ] Activity logging works on all actions
 - [ ] Admin log endpoint works
+- [ ] Data retention cron job is configured and tested
 - [ ] All tests pass

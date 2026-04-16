@@ -130,13 +130,17 @@ The guard whose infrastructure was set up in Phase 4 is activated here. On every
 3. Unique constraint check
 4. Create `UserBlock` record
 
-**Effects of blocking (retroactive to existing modules):**
-Ensure the following filters work in existing modules in this phase:
-- Topic listing: blocked users' topics excluded
-- Comment listing: blocked users' comments excluded (except anonymous)
-- Topic detail: blocked user's topic → 404
-- Commenting: comment on blocked user's topic → 403
-- Voting: no block on voting on blocked user's topic (votes are anonymous)
+**Effects of blocking (full blocking policy — retroactive to all existing modules):**
+Blocking means "I don't want to see or interact with this person at all." The following filters must work:
+- Topic listing: blocked users' topics are completely excluded
+- Topic detail: blocked user's topic → 404 Not Found (as if it doesn't exist)
+- Comment listing: blocked users' comments are excluded (except anonymous comments — identity is unknown)
+- Voting: cannot vote on blocked user's topic (topic returns 404, so voting endpoint is unreachable)
+- Commenting: cannot comment on blocked user's topic (topic returns 404)
+- Profile: blocked user's profile → 404 Not Found
+- Notifications: no notifications from blocked users (already defined in Phase 10)
+
+This is a symmetric check: if User A blocks User B, then User A cannot see User B's content AND User B cannot see User A's content. This prevents harassment scenarios.
 
 **BlockService** helper method:
 `isBlocked(userId, targetUserId): boolean` — Other modules use this service to check block status.

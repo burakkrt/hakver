@@ -33,6 +33,7 @@
 - page: number, default 1, min 1
 - limit: number, default 20, min 1, max 50
 - sort: "newest" | "popular" (optional, default "newest")
+- search: string (optional, min 2 characters)
 
 `packages/shared/src/schemas/category.ts`:
 
@@ -86,17 +87,20 @@ topic/
 |--------|------|------|-------------|
 | POST | /topics | JWT + Verified | Create topic |
 | GET | /topics | Public | Topic list (paginated, filterable) |
-| GET | /topics/:id | Public | Topic detail (accessible by id or slug) |
+| GET | /topics/:idOrSlug | Public | Topic detail — accepts both UUID and slug. Backend auto-detects by UUID format (8-4-4-4-12 hex pattern). |
 | PATCH | /topics/:id | JWT + Verified | Edit topic (12-hour limit, author only) |
 | DELETE | /topics/:id | JWT + Verified | Delete topic (author or moderator only) |
 | POST | /topics/:id/images | JWT + Verified | Add image to topic |
 | DELETE | /topics/:id/images/:imageId | JWT + Verified | Remove image |
+| PATCH | /topics/:id/cover | JWT + Verified | Set cover image (author only, within editableUntil) |
+| GET | /topics/search | Public | Search topics by title (ILIKE query, paginated) — same query params as topic list + `search` parameter |
 
 ### 6. Topic Creation Flow
 
 1. Validation with `CreateTopicSchema`
 2. **New user prerequisite check:** Verify the user has cast at least 1 vote (check for records in the Vote table). If not → 403 "Konu açabilmek için en az bir konuya oy vermeniz gerekiyor"
 3. **Restriction check:** `restriction.guard` checks for active restrictions (`topic:create` action)
+3.1. **Profile completion check:** `ProfileCompleteGuard` ensures username, firstName, lastName are not null
 4. Check if category exists and `isActive: true`
 5. Create topic:
    - `slug` field is auto-generated from the title (Turkish character support, unique — appends `-2`, `-3` on collision)
@@ -107,6 +111,7 @@ topic/
    - Generate a random 4-digit number
    - `displayName = "Anonim {Animal} #{number}"` (e.g.: "Anonim Penguen #4521")
 7. Return the topic with its ID
+8. **Cover photo:** If images are uploaded, the first image (`sortOrder: 0`) is automatically set as the cover photo (`topic.coverImageId`). The author can change the cover selection via `PATCH /topics/:id/cover` within the editing window.
 
 **Animal list** (for anonymous identities):
 Penguen, Baykuş, Tilki, Panda, Koala, Yunus, Kelebek, Kartal, Kurt, Aslan, Kedi, Tavşan, Sincap, Flamingo, Papağan
@@ -122,6 +127,8 @@ Penguen, Baykuş, Tilki, Panda, Koala, Yunus, Kelebek, Kartal, Kurt, Aslan, Kedi
 6. Response: `{ id, url, sortOrder }`
 
 File received via multipart form-data (`@nestjs/platform-express` Multer).
+
+Image add and remove operations follow the same 12-hour editing window (`editableUntil`) as text editing. After the window expires, images cannot be added or removed.
 
 ### 8. Topic Editing
 
@@ -144,9 +151,11 @@ File received via multipart form-data (`@nestjs/platform-express` Multer).
 `GET /topics`:
 - Pagination: offset-based (`page`, `limit`)
 - Filtering: `categorySlug` (optional)
+- Search: `search` query parameter (optional) — PostgreSQL ILIKE on title field. Minimum 2 characters.
 - Sorting: `newest` (createdAt DESC) or `popular` (voteCountRight + voteCountWrong DESC)
 - `deletedAt: null` filter (soft delete middleware)
 - For each topic: id, title, content (truncated 200 char), author card (or anonymous card), category, vote counts, comment count, image count, createdAt
+- If authenticated: `myVote: "RIGHT" | "WRONG" | null` — the current user's vote on this topic (requires a batch query or LEFT JOIN on the Vote table)
 - **Block filter:** If current user exists, exclude topics from blocked users
 
 ### 11. Topic Detail

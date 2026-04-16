@@ -56,7 +56,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | passwordHash | String? | null = OAuth user |
 | firstName | String | |
 | lastName | String | |
-| username | String | unique, index |
+| username | String? | unique (when not null), index — nullable for OAuth users before profile completion |
 | dateOfBirth | DateTime | |
 | gender | Gender enum | |
 | bio | String? | max 500 characters |
@@ -132,6 +132,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | voteCountRight | Int | default 0, denormalized |
 | voteCountWrong | Int | default 0, denormalized |
 | commentCount | Int | default 0, denormalized |
+| coverImageId | FK → TopicImage? | null = first image is cover |
 | deletedAt | DateTime? | soft delete |
 
 #### TopicImage
@@ -309,13 +310,6 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | acceptedAt | DateTime | default now |
 | ipAddress | String? | |
 
-#### StorePointBalance (future — table only)
-| Field | Type | Constraint |
-|-------|------|-----------|
-| id | UUID | PK |
-| userId | FK → User | unique |
-| balance | Int | default 0 |
-
 ### 4. Indexes
 
 Additional indexes for performance:
@@ -333,7 +327,7 @@ Additional indexes for performance:
 Under `apps/api/src/prisma/`:
 
 **`prisma.module.ts`** — Global module (`@Global()`)
-**`prisma.service.ts`** — Service extending `PrismaClient`. `$connect()` on `onModuleInit`, `$disconnect()` on `onModuleDestroy`. Soft delete middleware: automatically applies `deletedAt: null` filter on `findMany`, `findFirst`, `findUnique` queries (can be overridden).
+**`prisma.service.ts`** — Service extending `PrismaClient` with `$extends` (Client Extensions). `$connect()` on `onModuleInit`, `$disconnect()` on `onModuleDestroy`. Soft delete via Client Extensions: all `findMany`, `findFirst`, `findUnique` queries automatically filter `deletedAt: null`. Override with custom methods like `findManyWithDeleted()` and `findFirstWithDeleted()` for moderator/admin access to deleted content. This approach is more modern and type-safe than Prisma middleware.
 
 ### 6. Seed Data
 

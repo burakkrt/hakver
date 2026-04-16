@@ -27,6 +27,17 @@ Init with shadcn/ui CLI:
 Add the following shadcn/ui components:
 `button`, `input`, `textarea`, `label`, `card`, `dialog`, `dropdown-menu`, `avatar`, `badge`, `toast`, `tabs`, `select`, `switch`, `checkbox`, `separator`, `skeleton`, `sheet` (mobile sidebar), `popover`, `tooltip`, `form`
 
+### 1.1. Dark Mode (next-themes)
+
+**Dark mode toggle:**
+- Install `next-themes`
+- Configure `ThemeProvider` in root layout with `attribute="class"` (for Tailwind `dark:` prefix)
+- Default theme: system preference (`defaultTheme: "system"`)
+- shadcn/ui already supports dark mode via CSS variables — no extra component work needed
+- Theme toggle button in the header (sun/moon icon)
+- Store preference in localStorage (next-themes handles this automatically)
+- All custom Tailwind colors must have `dark:` variants defined in `tailwind.config.ts`
+
 ### 2. Tailwind Configuration
 
 **`tailwind.config.ts`** extensions:
@@ -52,7 +63,7 @@ Add the following shadcn/ui components:
 
 **`src/components/layout/header.tsx`**:
 - Logo (left)
-- Search (center — for the future, placeholder for now)
+- Search bar (center) — text input with search icon. On submit, navigates to `/search?q={query}`. Debounced autocomplete dropdown showing top 5 matching topic titles (calls `GET /topics?search={query}&limit=5`). On mobile: search icon that expands to full-width input.
 - Right menu based on auth state:
   - Not logged in → Giriş Yap / Kayıt Ol buttons
   - Logged in → Notification icon (badge with unread count) + Avatar dropdown (Profil, Ayarlar, Çıkış)
@@ -102,6 +113,7 @@ Tokens are stored in `localStorage`. With Zustand persist middleware.
 - If token exists → fetch user info with `/users/me`
 - 401 → attempt refresh → if failed → clearAuth
 - Loading spinner while auth state is loading
+- Profile completion check: if user exists but `username`, `firstName`, or `lastName` is null → set `requiresProfileCompletion: true` in auth state. Auth guard redirects to `/complete-profile` when a write action is attempted.
 
 ### 8. TanStack Query Provider
 
@@ -170,7 +182,7 @@ Vitest + React Testing Library setup for `apps/web`:
 - Skip to content link (hidden in header, visible on Tab)
 - `alt` text required on all images
 
-### 13. Route Structure Preparation
+### 15. Route Structure Preparation
 
 App Router directory structure (empty page files, content in subsequent phases):
 
@@ -190,6 +202,7 @@ src/app/
 │   ├── [username]/page.tsx             # User profile
 │   └── settings/page.tsx               # Profile settings
 ├── notifications/page.tsx
+├── search/page.tsx                      # Search results
 ├── categories/[slug]/page.tsx
 ├── terms-of-service/page.tsx
 ├── privacy-policy/page.tsx
@@ -252,4 +265,6 @@ pnpm dev
 - [ ] Emoji picker works
 - [ ] Route structure is ready (placeholder pages)
 - [ ] Mobile-first responsive layout works
+- [ ] Dark mode toggle works (light/dark/system)
+- [ ] Search bar navigates to search results page
 - [ ] `pnpm build` succeeds without errors

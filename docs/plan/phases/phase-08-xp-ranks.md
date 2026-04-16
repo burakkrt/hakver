@@ -57,6 +57,8 @@ Add XP hooks to modules created in Phases 5, 6, and 7:
 
 **Topic Module (Phase 5):**
 - After topic creation → `xpService.awardXp(userId, 'TOPIC_CREATE', 'TOPIC', topicId)`
+- After topic deletion by author → `xpService.revokeXp(userId, 'TOPIC_CREATE', 'TOPIC', topicId)`
+- After topic deletion by moderator → XP is preserved (no revocation)
 
 **Vote Module (Phase 6):**
 - After casting a vote → `xpService.awardXp(userId, 'VOTE_CREATE', 'VOTE', voteId)`
@@ -67,7 +69,24 @@ Add XP hooks to modules created in Phases 5, 6, and 7:
 
 **Comment Module (Phase 7):**
 - After comment creation → `xpService.awardXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
+- After comment deletion by author → `xpService.revokeXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
+- After comment deletion by moderator → XP is preserved (no revocation)
 - When a comment is liked → `xpService.awardXp(comment.authorId, 'COMMENT_LIKE_RECEIVED', 'COMMENT_LIKE', commentLikeId)`
+
+### 3.1. XP Revocation on Content Deletion
+
+When content is soft-deleted, XP handling depends on who performed the deletion:
+
+**User self-deletion (author deletes their own content):**
+- Topic deleted by author → revoke `TOPIC_CREATE` XP (50 points)
+- Comment deleted by author → revoke `COMMENT_CREATE` XP (10 points)
+- This prevents XP farming (create → earn XP → delete → repeat)
+
+**Moderator deletion:**
+- Topic deleted by moderator → XP is NOT revoked (the user produced content, moderator enforced rules)
+- Comment deleted by moderator → XP is NOT revoked
+
+**Implementation:** The `deleteBy` context (author vs moderator) is passed to the XP service. Use the `comment:delete` and `topic:delete` permission check result to determine the actor type. If the actor is the author (`authorId === currentUser.id`), revoke XP. If the actor has `topic:delete` or `comment:delete` permission (moderator/admin), keep XP.
 
 ### 4. Displaying Rank Info in Responses
 

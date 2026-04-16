@@ -1,7 +1,7 @@
-# Phase 16: Deployment & CI/CD
+# Phase 17: Deployment & CI/CD
 
 ## Dependencies
-- Phase 15 must be completed (tests passing, security audit finished)
+- Phase 16 must be completed (tests passing, security audit finished)
 
 ## Goals
 - Frontend deployment to Vercel
@@ -24,10 +24,10 @@
 
 ```dockerfile
 # Basic structure:
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 # pnpm install, prisma generate, nest build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 # Only dist/ and node_modules/
 USER node
 EXPOSE 3001
@@ -76,6 +76,20 @@ Migration to production database:
    - `NEXT_PUBLIC_SOCKET_URL` — Railway backend URL (wss)
 8. Deploy trigger: main branch push
 9. Domain: Vercel-provided .vercel.app domain (custom domain later)
+
+### 4.1. Vercel Admin Panel Deployment
+
+1. Create a second project in Vercel dashboard for the admin panel
+2. Connect the same GitHub repository
+3. Framework: Next.js
+4. Root Directory: `apps/admin`
+5. Build Command: `cd ../.. && pnpm turbo build --filter=admin`
+6. Install Command: `pnpm install`
+7. Environment variables:
+   - `NEXT_PUBLIC_API_URL` — Railway backend URL (same as main frontend)
+8. Deploy trigger: main branch push
+9. Domain: Separate Vercel subdomain (e.g., admin.hakver.com later)
+10. **Access control:** Admin panel is only accessible to authenticated users with ADMIN or MODERATOR roles. Authentication is enforced in the app, not at the hosting level.
 
 ### 5. Google OAuth Production Configuration
 
@@ -142,9 +156,31 @@ jobs:
       - run: pnpm --filter web test
       # Playwright E2E tests here or in a separate job
 
+  test-admin:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+      - uses: actions/setup-node@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter admin test
+
   # Deploys are triggered automatically by Vercel and Railway on main push
   # This CI only runs test and lint checks
 ```
+
+### 7.1. Cron Jobs (Production)
+
+The following scheduled jobs run in the backend (`@nestjs/schedule`):
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Activity Log Cleanup | Daily 03:00 AM | Delete regular activity logs > 90 days, security logs > 1 year |
+| Notification Cleanup | Daily 03:30 AM | Delete notifications > 90 days |
+| Expired Restriction Cleanup | Daily 04:00 AM | Clean up expired restriction records (optional, soft cleanup) |
+
+These are configured in a `ScheduleModule` within the backend. Ensure Railway keeps at least one instance running for cron jobs to execute.
 
 ### 8. Production Smoke Test
 
@@ -181,6 +217,16 @@ curl https://[backend-url]/api/v1/health
 
 # 10. Mobile
 # From phone browser → is responsive layout correct
+
+# 11. Admin Panel
+# https://[admin-url] → page loads
+# Login as admin → dashboard accessible
+# View reports → review a report
+# Login as normal user → access denied
+
+# 12. Cron Jobs
+# Check Railway logs → did cleanup jobs run at scheduled times?
+# Activity logs older than 90 days → cleaned up?
 ```
 
 ### 9. Monitoring and Error Tracking
@@ -217,10 +263,11 @@ GitHub repository settings:
 - [ ] Production environment variables differ from development (especially JWT secrets)
 - [ ] HTTPS enforced (Vercel and Railway provide this automatically)
 - [ ] Swagger disabled in production
-- [ ] CORS restricted to production frontend URL
+- [ ] CORS restricted to production frontend URL(s) — both main frontend and admin panel
 - [ ] Google OAuth in production mode (Published)
 - [ ] .env files not in the repository
 - [ ] Branch protection active
+- [ ] Admin panel accessible only to admin/moderator users
 
 ## Test Plan
 
@@ -246,13 +293,16 @@ GitHub repository settings:
 ## Completion Criteria
 - [ ] Backend running on Railway, health endpoint returns 200
 - [ ] Frontend running on Vercel, page loads
+- [ ] Admin panel running on Vercel, accessible to admin/moderator only
 - [ ] Production database migrated and seed data loaded
 - [ ] Google OAuth works in production
 - [ ] Email sending works in production
 - [ ] Image upload works in production
 - [ ] WebSocket works in production
-- [ ] CI pipeline runs on PRs
+- [ ] CI pipeline runs on PRs (including admin panel)
 - [ ] Main branch protected
-- [ ] Production smoke test completed
+- [ ] Production smoke test completed (including admin panel)
 - [ ] HTTPS active
 - [ ] Swagger disabled in production
+- [ ] Cron jobs running (activity log + notification cleanup)
+- [ ] Data retention policy enforced

@@ -50,6 +50,7 @@ Under `apps/api/src/modules/comment/`:
 1. Validation with `CreateCommentSchema`
 2. Check if topic exists and `deletedAt: null`
 3. **Restriction check:** `comment:create` action
+3.1. **Profile completion check:** `ProfileCompleteGuard` ensures the commenter's profile is complete
 4. **Nesting check:**
    - `parentId` null → level 1 comment
    - `parentId` populated → does parent comment exist? Is the parent itself level 1? (is parentId null?) If parent is already a reply (parentId populated) → use parent's parent as `parentId` (keep at level 2)
@@ -68,7 +69,7 @@ Under `apps/api/src/modules/comment/`:
 
 1. Author check: `comment.authorId === currentUser.id`
 2. `deletedAt: null` check
-3. **Rate limit check:** has at least 30 seconds passed between `lastEditedAt` and current time? If not → 429 "Çok sık düzenleme yapıyorsunuz, lütfen bekleyin"
+3. **Rate limit check:** has at least 30 seconds passed between `lastEditedAt` and current time? If not → 429 "Çok sık düzenleme yapıyorsunuz, lütfen bekleyin". Note: There is no time limit for comment editing (unlike topics which have a 12-hour window). Comments can be edited at any time, with only the 30-second cooldown between edits. The `isEdited` flag and `lastEditedAt` timestamp are always updated.
 4. Validation with `UpdateCommentSchema`
 5. Update: `content`, `isEdited = true`, `lastEditedAt = now()`
 

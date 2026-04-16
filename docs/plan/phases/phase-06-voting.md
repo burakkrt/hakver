@@ -41,6 +41,7 @@ Under `apps/api/src/modules/vote/`:
 2. **Own topic check:** `topic.authorId === currentUser.id` → 403 "Kendi konunuza oy veremezsiniz"
 3. **Duplicate vote check:** `(userId, topicId)` unique constraint in `Vote` table. If vote already exists → 409 "Bu konuya zaten oy verdiniz"
 4. **Restriction check:** check for active restriction on `vote:create` action
+4.1. **Profile completion check:** `ProfileCompleteGuard` ensures the voter's profile is complete
 5. Create vote record
 6. Update denormalized counter on Topic:
    - `type === RIGHT` → `voteCountRight += 1`
@@ -95,12 +96,19 @@ Under `apps/api/src/websocket/`:
 - Server → Client: `vote:updated` → `{ topicId, voteCountRight, voteCountWrong }`
 - Event names and payload types are imported from `@hakver/shared/websocket-events.ts`
 
+**Redis Adapter:**
+- Install `@socket.io/redis-adapter`
+- Configure with `REDIS_URL` (Upstash Redis)
+- Required for production scaling — without Redis adapter, WebSocket events are not shared across multiple backend instances
+- Setup in the gateway module initialization
+
 Only the vote event is set up in this phase. Other events (comment, notification) will be added in subsequent phases.
 
 ### 8. Block Filter
 
-- Blocked user's votes on topics are not hidden (votes are anonymous anyway)
-- Blocking voting on a blocked user's topics is not necessary (votes are right/wrong, not personal)
+- If the voter has blocked the topic author → voting is blocked (topic returns 404 due to full blocking policy)
+- If the topic author has blocked the voter → voting is blocked (topic returns 404 due to full blocking policy)
+- Full blocking means all interactions are prevented: the blocked user's content is completely invisible and inaccessible
 
 ## Security Checklist
 - [ ] User cannot vote on their own topic

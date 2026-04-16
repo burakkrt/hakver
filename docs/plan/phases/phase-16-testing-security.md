@@ -1,7 +1,7 @@
-# Phase 15: Integration Testing & Security Audit
+# Phase 16: Integration Testing & Security Audit
 
 ## Dependencies
-- Phase 14 must be completed (all frontend finished)
+- Phase 14 and Phase 15 must be completed (all frontend + admin panel finished)
 
 ## Goals
 - E2E tests (Playwright)
@@ -68,6 +68,24 @@ Playwright test files under `apps/web/e2e/`.
 - Home page on mobile viewport → mobile nav visible
 - Tablet viewport → appropriate layout
 - Desktop → full layout
+
+#### Admin panel flow (`admin.spec.ts`)
+- Admin login → dashboard accessible
+- View reports → filter by status → review report
+- Apply restriction → restricted user cannot perform action
+- View activity logs → filter by user/action
+- Update XP action values → verify changes
+- Non-admin user → admin panel returns 403
+
+#### Search flow (`search.spec.ts`)
+- Search by topic title → relevant results
+- Empty search → empty state
+- Search with special characters → no errors
+
+#### Profile completion flow (`profile-completion.spec.ts`)
+- OAuth user without username → blocked from creating topic → redirected to profile completion
+- Complete profile → can now create topics
+- User with complete profile → no redirect
 
 ### 2. Backend Integration Tests
 

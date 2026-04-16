@@ -120,7 +120,7 @@ auth/
 8. 6-digit verification code is generated and stored in Redis (TTL: 10 minutes, key: `email-verify:{userId}`)
 9. Verification code is sent to the user's email via Resend (React Email template)
 10. Access + refresh tokens are returned
-11. **Consent text has not been approved yet** — client side redirects to the consent screen
+11. **Post-registration redirect order:** Register → Consent screen → Email verification. Consent approval must happen before email verification. The client redirects to the consent screen first, then to email verification.
 
 ### 6. Email Verification Flow
 
@@ -131,6 +131,8 @@ auth/
 ### 7. Google OAuth Flow
 
 **IMPORTANT:** Since the global prefix is `/api/v1`, the callback URL must be `http://localhost:3001/api/v1/auth/google/callback`. The `GOOGLE_CALLBACK_URL` in `docs/environments.md` and the redirect URI in Google Cloud Console must match this.
+
+**Action required:** Update `GOOGLE_CALLBACK_URL` in `docs/environments.md` to `http://localhost:3001/api/v1/auth/google/callback` to match this requirement.
 
 1. `GET /auth/google` → redirect to Google with Passport Google Strategy
 2. Google callback → `GET /auth/google/callback`
@@ -150,6 +152,14 @@ auth/
 3. Update user: `username`, `gender`, `dateOfBirth`
 4. Return new tokens with updated user info
 
+### 8.1. Profile Completion Guard
+
+Users with incomplete profiles (missing `username`, `firstName`, or `lastName`) are blocked from all write actions across the platform (topic create, comment, vote). This is enforced:
+- **Backend:** A `ProfileCompleteGuard` checks these fields before any write endpoint. Returns 403 with code `USER_PROFILE_INCOMPLETE` and a message: "Devam etmek için profilinizi tamamlayın".
+- **Frontend:** Auth provider checks profile completeness and redirects to `/complete-profile` when a write action is attempted.
+
+This guard is critical because OAuth users (Google) may have null `username` and potentially missing name fields. The guard ensures no anonymous-looking content (empty author info) appears on the platform.
+
 ### 9. Consent Text Approval
 
 `POST /auth/accept-consent`:
@@ -168,6 +178,15 @@ Under `apps/api/src/modules/mail/`:
 
 **Templates:**
 - `email-verification.tsx` — Verification code email. Platform logo, short message, 6-digit code, expiration time info.
+
+**Async email processing with BullMQ:**
+- Install `@nestjs/bullmq` + `bullmq`
+- Create `MailQueue` with Redis connection (`REDIS_URL`)
+- Email sending jobs are added to the queue instead of sending synchronously
+- API responses don't wait for email delivery — fire and forget via queue
+- Retry: 3 attempts with exponential backoff
+- Dead letter queue for failed emails (logged for debugging)
+- This ensures API response times aren't affected by email service latency
 
 ### 11. Password Reset Flow
 
@@ -196,11 +215,14 @@ All user text inputs (topic title, content, comment, bio) are stripped of HTML t
 ### 13. Rate Limiting
 
 With `@nestjs/throttler`:
+
+Uses `@nestjs/throttler` with `@nestjs/throttler-storage-redis` for distributed rate limiting. In-memory throttler doesn't work across multiple instances in production. Redis store shares rate limit counters across all backend instances.
+
 - Global: 60 requests / minute (IP-based)
 - Auth endpoints: 5 requests / minute (IP-based)
 - Email delivery: 1 request / 60 seconds (user-based)
 
-### 12. CORS Configuration
+### 14. CORS Configuration
 
 CORS settings in `main.ts`:
 - Origin: `FRONTEND_URL`

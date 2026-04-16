@@ -67,6 +67,7 @@
 - Category badge
 - Vote status: Haklı / Haksız buttons + counts (small version)
 - Comment count icon + count
+- Vote indicator: if authenticated, a small colored dot or icon showing the user's vote (green dot = Hakli, red dot = Haksiz, no dot = not voted). This comes from the `myVote` field in the topic list API response.
 - Image thumbnail (if available, first image)
 - Date (relative: "2 saat önce")
 - Card click → navigate to topic detail
@@ -87,6 +88,7 @@
 - Title (full)
 - Content text (Twemoji render)
 - Images (gallery/carousel)
+- Cover image displayed prominently at the top (full-width banner). Other images shown in a smaller gallery/carousel below.
 - Author card (or anonymous card)
 - Category badge
 - Date + "düzenlendi" label (if applicable)
@@ -123,6 +125,9 @@ Protected with auth guard.
   - Uploaded images displayed as thumbnails (max 4)
   - "Remove" button on each image
   - File size/type error messages
+  - **Cover photo selection:** After uploading images, each thumbnail shows a "Kapak Yap" button (or star icon). Clicking it sets that image as the cover photo. The selected cover image has a visible "Kapak" badge/overlay. If no cover is manually selected, the first uploaded image is automatically the cover.
+  - When editing a topic, the cover selection is preserved. If the cover image is removed, the next image becomes the cover automatically.
+  - Cover photo is displayed prominently at the top of the topic detail page and as the thumbnail in topic cards.
 - Anonymous post switch + description: "Bu konu anonim olarak paylaşılacak. Bu seçim geri alınamaz."
 - "Paylaş" button
 
@@ -181,7 +186,21 @@ When "Edit" button is clicked on the topic detail page:
 
 Same structure as the home page but filtered by a specific category. Category name as page title. Server Component (SEO).
 
-### 10. WebSocket Integration
+### 10. Search Results Page (`/search`)
+
+**Query parameter:** `q` — search query string
+
+**Structure:**
+- Search input (pre-filled with query)
+- Results count: "{n} sonuç bulundu" or "Sonuç bulunamadı"
+- Topic card list (same component as home page)
+- Pagination (same as home page)
+
+**Server Component** for SEO: `<title>"{query}" araması | Hakver</title>`
+
+**Empty state:** "Aramanızla eşleşen konu bulunamadı. Farklı anahtar kelimeler deneyin." with a link to create a new topic.
+
+### 11. WebSocket Integration
 
 On the topic detail page:
 - Page mount → send `joinTopic(topicId)` event

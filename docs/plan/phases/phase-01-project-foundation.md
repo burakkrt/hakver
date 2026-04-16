@@ -31,7 +31,7 @@ packages:
 
 **`.gitignore`** — Node.js, Next.js, NestJS, Prisma, IDE, OS files. Including `.env` and `docs/environments.md`.
 
-**`.nvmrc`** — Node.js LTS version pinning (20.x).
+**`.nvmrc`** — Node.js LTS version pinning (22.x).
 
 ### 2. TypeScript Configuration
 
@@ -41,7 +41,7 @@ Each app and package extends the root config in its own `tsconfig.json` file.
 
 ### 3. ESLint & Prettier
 
-**`.eslintrc.js`** (root) — TypeScript + Prettier integration. Each app extends its own ESLint config.
+**`eslint.config.js`** (root) — ESLint flat config format. TypeScript + Prettier integration. Each app extends its own ESLint config.
 
 **`.prettierrc`** — `semi: true`, `singleQuote: true`, `trailingComma: "all"`, `tabWidth: 2`, `printWidth: 100`.
 
@@ -159,11 +159,18 @@ packages/shared/
 - `notification:new` → `NotificationResponse`
 - `notification:unread-count` → `{ count: number }`
 
+**`api-response.ts`** — Standard API response and error formats:
+- `ApiErrorResponse`: `{ statusCode: number, code: string, message: string, errors?: { field: string, message: string }[] }`
+- `PaginatedResponse<T>`: `{ data: T[], meta: { total: number, page: number, limit: number, totalPages: number, hasNext: boolean } }`
+- These types are used by all API endpoints for consistent responses.
+
 ### 7. Environment Variables
 
-Create `.env` files using values from the `docs/environments.md` file:
-- `apps/api/.env` — All backend variables
-- `apps/web/.env` — All frontend variables
+Create `.env.example` files with placeholder values in the repository. Actual values come from `docs/environments.md`:
+- `apps/api/.env.example` — All backend variables with placeholder values
+- `apps/web/.env.example` — All frontend variables with placeholder values
+
+`.env.example` files are committed to the repo with placeholder values. `docs/environments.md` and `.env` files must be in `.gitignore`.
 
 ### 8. Redis Cache Module
 
@@ -186,22 +193,22 @@ Detailed `nestjs-pino` configuration:
 
 `docker-compose.yml` (root) — For local development only. Redis container (can be used for local testing instead of Upstash). Backend and frontend are not Docker-dependent, they run directly.
 
-### 9. Git Hooks
+### 11. Git Hooks
 
 **Husky + lint-staged** setup:
 - Pre-commit: lint-staged (ESLint + Prettier on relevant files)
 - Commit-msg: commitlint (conventional commits format)
 
-### 10. GitHub Actions CI
+### 12. GitHub Actions CI
 
 `.github/workflows/ci.yml`:
 - Trigger: push and PR (all branches)
 - Steps: checkout, pnpm setup, install, lint, type-check, test
-- Matrix: Node.js LTS
+- Matrix: Node.js 22 LTS
 
 ## Security Checklist
 - [ ] `.env` files are in `.gitignore`
-- [ ] `docs/environments.md` is in `.gitignore`
+- [ ] `docs/environments.md` and all `.env` files are in `.gitignore` — only `.env.example` files with placeholder values are committed
 - [ ] `configuration.ts` prevents application startup on missing env variables
 - [ ] CORS only allows `FRONTEND_URL`
 - [ ] Swagger is only active in development mode
