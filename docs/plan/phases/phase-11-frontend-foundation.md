@@ -145,9 +145,10 @@ Tokens are stored in `localStorage`. With Zustand persist middleware.
 ### 11. Shared Components
 
 **`src/components/shared/user-card.tsx`**:
-- Avatar, username, rank badge, name-surname (masked)
-- Anonymous variant: animal icon, displayName
-- Compact (inside comment/topic) and full (profile) variants
+- Compact / card variant (used in topic lists, topic detail author area, comment lists, notification actors, vote lists): Avatar + username + rank badge. No firstName/lastName. Renders `UserPublicCardSchema`
+- Full / profile header variant (used only on `/profile/[username]`): Avatar + username + rank badge + the formatted name "Ahmet D." (firstName full + lastName first character + "."). Owner of the profile sees the full surname instead. Renders `UserPublicResponseSchema` for others, `UserPrivateResponseSchema` for owner
+- Anonymous variant: animal icon, displayName (e.g., "Anonim Penguen #4521")
+- The compact variant must never receive firstName/lastName props — this is a platform-wide identity rule
 
 **`src/components/shared/anonymous-card.tsx`**:
 - Animal icon + "Anonim Penguen #4521" displayName

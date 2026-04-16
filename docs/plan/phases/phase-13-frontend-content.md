@@ -22,6 +22,8 @@
 - `useTopic(id)` → GET /topics/:id (query)
 - `useCreateTopic()` → POST /topics (mutation)
 - `useUpdateTopic()` → PATCH /topics/:id (mutation)
+- `useSetTopicUpdateNote()` → PATCH /topics/:id/update-note (mutation)
+- `useClearTopicUpdateNote()` → DELETE /topics/:id/update-note (mutation)
 - `useDeleteTopic()` → DELETE /topics/:id (mutation)
 - `useUploadTopicImage()` → POST /topics/:id/images (mutation)
 
@@ -77,6 +79,7 @@
 - Date (relative: "2 saat önce")
 - Bookmark icon (filled if bookmarked, click to toggle)
 - Pinned badge (if isPinned — "Sabitlenmiş" label, pinned topics shown at top of list)
+- Update badge (if `hasUpdate` — "Güncellendi" label, signals that the author added a post-window update note)
 - Card click → navigate to topic detail
 
 **Infinite scroll:** Automatically load next page when approaching the bottom.
@@ -99,7 +102,8 @@
 - Author card (or anonymous card)
 - Category badge
 - Date + "düzenlendi" label (if applicable)
-- Action menu (if topic owner: Edit, Delete | everyone: Share, Report, Mute, Bookmark | moderator+: Pin/Unpin)
+- Update-note section (if `updateNote` is populated) — rendered below the original content as a visually distinct block titled "Güncelleme", showing the update text (Twemoji render) and the relative `updateNoteAt` timestamp
+- Action menu (if topic owner: Edit (within edit window), Güncelleme Ekle/Düzenle (any time — opens the update-note modal), Delete | everyone: Share, Report, Mute, Bookmark | moderator+: Pin/Unpin). If the topic is outside its edit window and the user is the author, "Edit" is hidden and only "Güncelleme Ekle/Düzenle" is shown
 
 *Voting section:*
 - Two large buttons: "Haklı" (green tone) and "Haksız" (red tone)
@@ -147,6 +151,17 @@ When "Edit" button is clicked on the topic detail page:
 - Inline editing or separate modal
 - Title and content are editable
 - 12-hour restriction: if backend returns 403 → "Düzenleme süresi dolmuştur" toast
+
+### 5.1. Update Note Modal
+
+`src/components/topic/topic-update-note-modal.tsx` — opened from the author's "Güncelleme Ekle" or "Güncelleme Düzenle" action.
+
+- Textarea with a 0/500 character counter, Turkish helper text explaining that the note appears below the original content and notifies voters and commenters
+- Submit button "Kaydet" (disabled while empty and unchanged)
+- If the note already exists, a secondary "Güncellemeyi Kaldır" button calls `useClearTopicUpdateNote()` after a confirmation dialog
+- Success → close modal, refresh the topic query, show toast "Güncellemeniz paylaşıldı" (or "Güncelleme kaldırıldı" on clear)
+- Errors: 429 → "Çok sık güncelleme yapıyorsunuz, biraz bekleyin" toast; 403 → "Bu konuya güncelleme ekleyemezsiniz" toast
+- The modal is accessible (focus trap, Escape to close, ARIA labels)
 
 ### 6. Comment Components
 
@@ -242,6 +257,11 @@ cd apps/web && pnpm build
 # /topics/create → fill form → upload images → select anonymous → post → redirect to detail page
 # New user (never voted) → warning message
 
+# Update note
+# Topic detail (author, after edit window) → "Güncelleme Ekle" action → modal → type 200 chars → Kaydet → "Güncelleme" block appears below content with relative timestamp
+# Card list → topic shows "Güncellendi" badge
+# Voter receives a `TOPIC_UPDATED` notification in real-time
+
 # Topic detail
 # /topics/:slug → title, content, images, author card, voting, comments are displayed
 # Vote → button highlighted, counters updated
@@ -278,6 +298,7 @@ cd apps/web && pnpm build
 - [ ] Topic creation works (form, image upload, anonymous, category)
 - [ ] Voting UI works (vote, change, withdraw, real-time)
 - [ ] Comment system works (create, reply, like, edit, delete)
+- [ ] Update-note modal works (add, edit, clear) and the "Güncelleme" block renders on the detail page with the "Güncellendi" badge on cards
 - [ ] 2-level nesting renders correctly
 - [ ] Anonymous cards display correctly
 - [ ] Emoji picker works

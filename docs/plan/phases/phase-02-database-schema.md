@@ -39,7 +39,7 @@ AuthProvider: LOCAL, GOOGLE
 VoteType: RIGHT, WRONG
 ReportTargetType: TOPIC, COMMENT, USER
 ReportStatus: PENDING, REVIEWED, RESOLVED, DISMISSED
-NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED
+NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED
 ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER
 ```
 
@@ -136,6 +136,8 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | isPinned | Boolean | default false |
 | pinnedAt | DateTime? | when the topic was pinned |
 | pinnedById | FK → User? | moderator/admin who pinned |
+| updateNote | String? | max 500 — author-written update shown below the original content after `editableUntil` expires |
+| updateNoteAt | DateTime? | timestamp of the most recent update-note change |
 | deletedAt | DateTime? | soft delete |
 
 #### TopicImage

@@ -52,7 +52,8 @@ Playwright test files under `apps/web/e2e/`.
 - View profile → info correct
 - Edit profile → info updated
 - Change avatar → avatar updated
-- Other user's profile → first/last name masked
+- Other user's profile → firstName shown in full, lastName rendered as a single initial plus "." (e.g., "Ahmet D.")
+- Cards (topic list, comment list, notification drawer) display only the username for the author — no firstName or lastName appears next to content
 
 #### Notification flow (`notification.spec.ts`)
 - Vote received → notification badge increases
@@ -107,6 +108,8 @@ Check and fix for each item:
 - [ ] User can only edit their own data (IDOR check)
 - [ ] Permission guards on all protected endpoints
 - [ ] No user info leaking behind anonymous content
+- [ ] Card responses (lists, feeds, notifications) never expose firstName or lastName — only admin endpoints return the full legal name
+- [ ] Profile endpoints for other users return an abbreviated surname
 - [ ] Deleted users cannot log in
 - [ ] Normal users cannot access admin endpoints
 
@@ -127,7 +130,7 @@ Check and fix for each item:
 - [ ] Restriction system cannot be applied to admins/moderators
 
 **A05: Security Misconfiguration**
-- [ ] CORS allows only FRONTEND_URL
+- [ ] CORS allows only the declared allowed origins (main web app + admin panel + any other configured origin) — no wildcard
 - [ ] Swagger enabled only in development
 - [ ] Stack traces hidden in production (exception filter)
 - [ ] Unnecessary HTTP headers removed (helmet middleware)

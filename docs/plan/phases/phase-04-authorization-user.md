@@ -35,14 +35,31 @@
 - currentPassword: string
 - newPassword: same rules as RegisterSchema
 
-**UserPublicResponseSchema** (data returned when viewing another user):
-- id, username, bio, avatarUrl, rankName, totalXp
-- firstName → first character only + "." (e.g.: "B.")
-- lastName → first character only + "." (e.g.: "K.")
-- createdAt
+**UserPublicCardSchema** (minimum author card — used in topic lists, topic details, comment lists, notification actors, vote lists, anywhere a user is represented alongside content):
+- id: UUID
+- username: string
+- avatarUrl: string
+- rankName: string
 
-**UserPrivateResponseSchema** (when viewing own profile):
-- UserPublicResponseSchema + firstName (full), lastName (full), email, dateOfBirth, gender, emailVerifiedAt, usernameChangedAt, emailChangedAt
+This schema intentionally excludes firstName and lastName. Full name is never shown next to content — the username is the primary public identifier across the platform.
+
+**UserPublicResponseSchema** (data returned when viewing another user's full profile):
+- UserPublicCardSchema fields
+- bio: string | null
+- totalXp: number
+- createdAt: ISO date string
+- firstName: string (full — e.g.: "Ahmet")
+- lastName: string (first character + "." — e.g.: "Demir" → "D.")
+- Rendered together as "Ahmet D." on the profile page. The backend never returns the untruncated family name on this endpoint.
+
+**UserPrivateResponseSchema** (when viewing own profile — the owner may see their full data):
+- UserPublicResponseSchema fields, but `lastName` is returned in full
+- email, dateOfBirth, gender, emailVerifiedAt, usernameChangedAt, emailChangedAt, hasAcceptedConsent
+
+**UserAdminResponseSchema** (admin-only endpoints — the admin dashboard needs the full legal name for compliance and moderation):
+- UserPrivateResponseSchema fields (target user's full firstName and lastName)
+- role, active restrictions, recent XP logs, recent reports (populated by admin endpoints that return this shape)
+- Never exposed through public or self endpoints — only admin/moderator routes with the appropriate permission
 
 ### 2. Permission Guard System
 
@@ -107,17 +124,26 @@ user/
 
 ### 5. Profile Viewing Privacy Rules
 
-**When viewing another user:**
-- firstName → first character + "." (e.g.: "Burak" → "B.")
-- lastName → first character + "." (e.g.: "Kurt" → "K.")
+**When viewing another user's profile (`GET /users/:username` → UserPublicResponseSchema):**
+- firstName: full (e.g.: "Ahmet") — the first name is not secret; only the family name is abbreviated for identity protection
+- lastName: first character + "." (e.g.: "Demir" → "D.") — rendered together as "Ahmet D."
 - email: not returned
 - dateOfBirth: not returned
 - gender: not returned
 
-**When viewing own profile:**
-- All fields are returned in full
+**When viewing own profile (`GET /users/me` → UserPrivateResponseSchema):**
+- All fields are returned in full, including the owner's full surname
 
-This transformation is done **in the service layer**, not with Prisma select. This way business logic stays in one place.
+**When representing a user alongside content (topic cards, comment cards, notification actors — UserPublicCardSchema):**
+- username, avatarUrl, rankName only
+- firstName and lastName are NOT returned on card responses. Any list, feed, or WebSocket event that includes a user reference must use the card schema, not the profile schema
+- This is a security-critical rule: the family name must not leak into feeds, notifications, search results, or any non-profile response
+
+**When accessed by an admin or moderator (UserAdminResponseSchema on admin endpoints):**
+- Full firstName and lastName are returned for moderation/compliance review
+- These endpoints require the admin role and are audited via the activity log
+
+All masking transformations are performed **in the service / DTO mapping layer**, not with Prisma `select`. This keeps the business rule in a single place and prevents accidental leakage when a new endpoint is added.
 
 ### 6. Username Change
 
@@ -198,6 +224,9 @@ When `DELETE /users/me` is called:
 ## Security Checklist
 - [ ] Permission guards are active on all protected endpoints
 - [ ] Profile privacy rules are applied in the service layer
+- [ ] Card responses (topic, comment, notification, vote lists) use `UserPublicCardSchema` and do NOT return firstName or lastName
+- [ ] Profile responses for other users return full firstName but abbreviate lastName to a single initial
+- [ ] Only admin/moderator endpoints return the full legal name; this access is audit-logged
 - [ ] User can only edit their own profile (userId match)
 - [ ] Current password is verified on password change
 - [ ] Current password is verified on email change
@@ -215,9 +244,11 @@ cd apps/api && pnpm test
 # API tests:
 
 # 1. Profile viewing
-GET /api/v1/users/me → 200, all fields (private)
-GET /api/v1/users/testuser → 200, name-surname masked (public)
+GET /api/v1/users/me → 200, all fields (private), full lastName
+GET /api/v1/users/testuser → 200, firstName full + lastName initial (e.g. "Ahmet D."), no email/dateOfBirth/gender
 GET /api/v1/users/nonexistent → 404
+# Card shape: any list endpoint's author object has no firstName/lastName keys
+GET /api/v1/topics → each topic.author contains { id, username, avatarUrl, rankName } only
 
 # 2. Profile update
 PATCH /api/v1/users/me { bio: "test" } → 200
@@ -247,8 +278,10 @@ GET /api/v1/users/check-username/test → { available: true/false }
 ## Completion Criteria
 - [ ] RBAC + Permission guards work
 - [ ] Verified guard works (unverified users are blocked)
+- [ ] ProfileComplete guard works (incomplete profiles are blocked from write actions)
 - [ ] Restriction guard infrastructure is ready (to be used in Phase 9)
-- [ ] Profile viewing privacy rules are applied
+- [ ] Profile viewing privacy rules are applied (firstName full, lastName initial on other-user profiles; card responses expose no name fields)
+- [ ] UserPublicCardSchema, UserPublicResponseSchema, UserPrivateResponseSchema, and UserAdminResponseSchema are all defined in `@hakver/shared` and used by the right endpoints
 - [ ] Username and email change limits work
 - [ ] Password change works
 - [ ] Avatar selection works

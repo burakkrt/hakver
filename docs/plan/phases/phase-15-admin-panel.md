@@ -155,7 +155,8 @@ Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL
 - Pagination
 
 **User detail** (`/users/[username]`):
-- Profile info (all fields, no masking — admin can see everything)
+- Profile info (UserAdminResponseSchema — full firstName and lastName exposed for moderation/compliance)
+- A dedicated "Kimlik Bilgileri" section visually groups full legal name and ID-adjacent fields so admins understand that this data is accessible only on admin routes. Access is audit-logged via the activity log
 - Role badges
 - **XP Management section (Admin only):**
   - Current XP and rank display

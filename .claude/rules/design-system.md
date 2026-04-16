@@ -9,16 +9,18 @@ Overall feel: Social, warm, friendly. A design that creates community feeling an
 
 ## Color Palette
 
+Every color below must define both a light and a dark variant. Dark variants follow the same semantic role but use shades adapted for dark surfaces.
+
 - **Primary:** Purple/Lavender tone — brand color, buttons, active elements, links
 - **Secondary:** Warm gray — text, background variations
 - **Accent:** Light purple tint — highlighting, hover states, selected elements
 - **Success:** Green — successful operations, "Haklı" vote emphasis
 - **Danger:** Red/coral — errors, warnings, "Haksız" vote emphasis
-- **Background:** Light, warm white (not cold white) — easy on the eyes
-- **Surface:** Light gray/white for cards and elevated areas
-- **Text primary:** Dark gray (not pure black)
+- **Background:** Light → warm white (not cold white); Dark → deep neutral (not pure black)
+- **Surface:** Light → light gray/white; Dark → elevated dark neutral — for cards and elevated areas
+- **Text primary:** Light → dark gray (not pure black); Dark → off-white (not pure white)
 - **Text secondary:** Medium gray — helper text, dates, placeholders
-- **Theme:** Light mode only
+- **Theme:** Light, dark, and system preference. System preference is the default; user choice overrides it and is persisted.
 
 ## Typography
 

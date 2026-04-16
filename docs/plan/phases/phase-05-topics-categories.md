@@ -30,17 +30,23 @@
 - voteCountWrong: number
 - commentCount: number
 - category: `{ id, name, slug }`
-- author: `UserPublicResponseSchema | AnonymousCardSchema` (based on isAnonymous)
+- author: `UserPublicCardSchema | AnonymousCardSchema` (based on isAnonymous)
 - images: `{ id, url, sortOrder }[]`
 - coverImage: `{ id, url }` | null
 - myVote: `"RIGHT" | "WRONG" | null` (only when authenticated)
 - isOwnTopic: boolean (only when authenticated and topic is anonymous)
 - isMuted: boolean (only when authenticated, from Phase 10)
+- updateNote: string | null — author-written update appended below the original content
+- updateNoteAt: ISO date string | null — timestamp of the latest update-note change
 - createdAt: ISO date string
 
 **TopicListItemSchema** (truncated version for list endpoints):
-- id, title, slug, isAnonymous, voteCountRight, voteCountWrong, commentCount, category, author, coverImage, myVote, createdAt
+- id, title, slug, isAnonymous, voteCountRight, voteCountWrong, commentCount, category, author, coverImage, myVote, hasUpdate, createdAt
 - content: string (truncated to 200 characters)
+- hasUpdate: boolean — `true` when `updateNote` is populated; enables the "Güncellendi" badge on the card
+
+**UpdateNoteSchema** (request DTO — used by the update-note endpoint):
+- updateNote: min 1, max 500 characters — set to `null` (or empty payload with explicit clear flag) to remove the existing note
 
 `packages/shared/src/schemas/category.ts`:
 
@@ -124,6 +130,8 @@ topic/
 | GET | /topics | Public | Topic list (paginated, filterable) |
 | GET | /topics/:idOrSlug | Public | Topic detail — accepts both UUID and slug. Backend auto-detects by UUID format (8-4-4-4-12 hex pattern). |
 | PATCH | /topics/:id | JWT + Verified | Edit topic (12-hour limit, author only) |
+| PATCH | /topics/:id/update-note | JWT + Verified | Add or replace the author's update note (author only, usable after the editing window closes) |
+| DELETE | /topics/:id/update-note | JWT + Verified | Clear the update note (author only) |
 | DELETE | /topics/:id | JWT + Verified | Delete topic (author or moderator only) |
 | POST | /topics/:id/images | JWT + Verified | Add image to topic |
 | DELETE | /topics/:id/images/:imageId | JWT + Verified | Remove image |
@@ -182,6 +190,26 @@ Image add and remove operations follow the same 12-hour editing window (`editabl
 4. Validation with `UpdateTopicSchema`
 5. Update, set `isEdited = true`
 
+### 8.1. Update Note (Post-Edit Window)
+
+The update note is an author-controlled annotation that appears below the original topic content after the 12-hour editing window has closed. It does not mutate the original title or content — it is a separate, timestamped addition used to inform the community about what happened after the topic was posted (inspired by the "UPDATE" convention on Reddit-style communities).
+
+`PATCH /topics/:id/update-note`:
+1. Topic author check (`authorId === currentUser.id`)
+2. `deletedAt !== null` check
+3. Validation with `UpdateNoteSchema` (max 500 characters, HTML stripped)
+4. Update `topic.updateNote` and set `topic.updateNoteAt = now()`
+5. Trigger `TOPIC_UPDATED` notification (Phase 10) when the note transitions from empty to populated OR when a populated note is replaced with new content; suppress the notification on no-op writes
+
+`DELETE /topics/:id/update-note`:
+1. Topic author check
+2. Clear `updateNote` and `updateNoteAt`
+3. No notification is sent on clear
+
+**Rate limit:** update-note writes are rate limited to 5 requests per hour per topic to prevent notification spam.
+
+**Availability window:** the endpoint is intentionally available after `editableUntil` has passed. It is also available during the editing window, but authors are encouraged to edit the original content directly in that window; the UI reflects this preference (Phase 13).
+
 ### 9. Topic Deletion
 
 `DELETE /topics/:id`:
@@ -210,7 +238,7 @@ Image add and remove operations follow the same 12-hour editing window (`editabl
 `GET /topics/:id`:
 - All topic info + images
 - Author card: if `isAnonymous` → `displayName` and `iconType` from `AnonymousIdentity`, no user info returned
-- Author card: if not `isAnonymous` → public user info (masked name-surname, username, avatar, rank)
+- Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatarUrl, rankName). Never include firstName/lastName on card responses — the card only identifies the author by username
 - If the viewing user is the topic author and topic is anonymous → `isOwnTopic: true` flag in response (for the client to show "this is your topic")
 
 ### 12. Anonymous Topic Response Rules
@@ -245,13 +273,15 @@ Image add and remove operations follow the same 12-hour editing window (`editabl
 }
 ```
 
-The `_moderatorInfo` field is only returned to users with the `user:view-anonymous` permission.
+The `_moderatorInfo` field is only returned to users with the `user:view-anonymous` permission. It exposes the real author's id and username so moderators can navigate to the admin user detail page (full legal name is fetched there via the admin endpoints that return `UserAdminResponseSchema`). The `_moderatorInfo` object itself never contains firstName or lastName — that data is intentionally scoped to admin endpoints.
 
 ## Security Checklist
 - [ ] User info is not returned in API response for anonymous topics (except moderators)
 - [ ] Image upload: file type and size are validated on the backend
 - [ ] Cloudinary upload goes through the backend (no direct frontend access)
 - [ ] Topic editing can only be done by the author, within 12 hours
+- [ ] Update-note endpoint is restricted to the topic author and is rate limited
+- [ ] Update-note content is HTML-stripped and length-validated
 - [ ] Topic deletion can only be done by the author or moderator/admin
 - [ ] New user prerequisite check cannot be bypassed
 - [ ] Restriction check is active
@@ -296,6 +326,13 @@ DELETE /api/v1/topics/:id (author) → 200
 DELETE /api/v1/topics/:id (moderator) → 200
 GET /api/v1/topics/:id (deleted) → 404
 
+# 6.1. Update note
+PATCH /api/v1/topics/:id/update-note (author, after 12-hour edit window) → 200, updateNote set, updateNoteAt populated
+PATCH /api/v1/topics/:id/update-note (non-author) → 403
+PATCH /api/v1/topics/:id/update-note (exceeds rate limit) → 429
+DELETE /api/v1/topics/:id/update-note (author) → 200, updateNote and updateNoteAt cleared
+GET /api/v1/topics/:id (after update) → response contains updateNote and updateNoteAt
+
 # 7. Image upload
 POST /api/v1/topics/:id/images (JPEG, 3MB) → 201
 POST /api/v1/topics/:id/images (GIF) → 400
@@ -310,6 +347,8 @@ POST /api/v1/topics/:id/images (5th image) → 400
 - [ ] Anonymous identity system works (consistent per topic)
 - [ ] Anonymous privacy rules are correctly applied
 - [ ] 12-hour editing restriction works
+- [ ] Update-note endpoint works (set, replace, clear) with author-only access and rate limiting
+- [ ] Update-note fields (`updateNote`, `updateNoteAt`, list `hasUpdate` flag) are returned in responses
 - [ ] New user prerequisite check works
 - [ ] Soft delete works
 - [ ] Block filter works in listing

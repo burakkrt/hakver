@@ -33,7 +33,7 @@ In `packages/shared/src/schemas/notification.ts`:
 - type: NotificationType enum
 - isRead: boolean
 - createdAt: ISO date string
-- actor: `UserPublicResponseSchema | AnonymousCardSchema`
+- actor: `UserPublicCardSchema | AnonymousCardSchema` (card shape — notification actors are never rendered with firstName/lastName)
 - reference: `{ type: ReferenceType, id: UUID, title?: string }`
 - message: string (Turkish, user-facing — generated from type + actor)
 
@@ -73,6 +73,10 @@ Add notification hooks to existing modules:
 - When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner
 - When a like is given → `COMMENT_LIKED` notification to comment owner
 - When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card if anonymous comment).
+
+**Topic Module:**
+- When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notification fanned out to users who voted on the topic and users who commented on the topic, minus the author themselves, minus users who muted the topic, minus users who have a mutual block with the author. The fan-out runs asynchronously via a BullMQ job to keep the request fast and avoid blocking the author's response. Clearing the update note does not trigger a notification.
+- Deduplication: if the author replaces the note while a previous `TOPIC_UPDATED` notification from the same topic is still unread by the recipient, update the existing notification's `createdAt` and keep it unread instead of creating a duplicate record. This prevents notification spam when the author iterates on the text.
 
 ### 5. Notification Listing
 
@@ -117,6 +121,7 @@ Add notification hooks to existing modules:
 - `COMMENT_LIKED`: "{actor} yorumunuzu beğendi"
 - `COMMENT_REPLIED`: "{actor} yorumunuza yanıt verdi"
 - `MENTIONED`: "{actor} sizi bir yorumda etiketledi"
+- `TOPIC_UPDATED`: "{actor} ilgilendiğiniz konuya bir güncelleme ekledi"
 
 ### 6. WebSocket Notification Delivery
 
@@ -285,12 +290,13 @@ GET /admin/activity-logs (normal user) → 403
 ```
 
 ## Completion Criteria
-- [ ] All notification types are created (vote, comment, like, reply)
+- [ ] All notification types are created (vote, comment, like, reply, mention, topic-updated)
 - [ ] Notification listing and mark-as-read works
 - [ ] Topic-based muting works
 - [ ] Real-time notification via WebSocket works
 - [ ] No self-notifications or notifications from blocked users
 - [ ] Anonymous notifications display correctly
+- [ ] `TOPIC_UPDATED` fan-out reaches voters and commenters (minus author, muted users, blocked) and deduplicates unread repeats
 - [ ] Activity logging works on all actions
 - [ ] Admin log endpoint works
 - [ ] Data retention cron job is configured and tested

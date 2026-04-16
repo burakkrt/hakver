@@ -117,13 +117,15 @@ Modal or full page:
 
 **Profile header:**
 - Avatar (large)
-- Username
-- Full name (masked: "B. K." — full on own profile)
+- Username (prominent — the primary identifier)
+- Name displayed as "Ahmet D." (firstName full + lastName first character + ".") when viewing another user's profile. The owner of the profile sees their full surname instead
 - Age (calculated from dateOfBirth: `Math.floor((now - dob) / 365.25 / 24 / 60 / 60 / 1000)`)
 - Bio
 - Rank badge + XP
 - Active restrictions (if any, warning banner)
 - If own profile → "Profili Düzenle" button
+
+Name rendering is driven by the API response shape. The frontend does not truncate the family name client-side — the backend returns the already-abbreviated string. This ensures the full surname is never present in client memory, devtools, or browser history for other users' profiles.
 
 **Profile tabs:**
 - Topics: list of topics created by the user

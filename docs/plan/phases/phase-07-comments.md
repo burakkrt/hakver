@@ -27,7 +27,7 @@
 - isDeleted: boolean
 - lastEditedAt: ISO date string | null
 - likeCount: number
-- author: `UserPublicResponseSchema | AnonymousCardSchema | null` (null if deleted)
+- author: `UserPublicCardSchema | AnonymousCardSchema | null` (null if deleted — card shape, no firstName/lastName)
 - isLiked: boolean (only when authenticated — whether current user liked this comment)
 - replyCount: number (total reply count for level 1 comments)
 - replies: `CommentResponseSchema[]` (first 5 replies, only for level 1 comments)
