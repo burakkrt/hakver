@@ -141,7 +141,7 @@ packages/shared/
 
 **`package.json`** — `name: "@hakver/shared"`, `main: "./src/index.ts"`. Dependency: `zod`.
 
-**`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType`. Every enum defined in the Prisma schema must also be defined here.
+**`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType` (TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER). Every enum defined in the Prisma schema must also be defined here.
 
 **`error-codes.ts`** — Standard error codes. These codes are used in backend responses across all phases:
 - `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT

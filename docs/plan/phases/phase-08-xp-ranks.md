@@ -4,13 +4,17 @@
 - Phase 5 (topics), Phase 6 (voting), and Phase 7 (comments) must be completed
 
 ## Goals
-- XP earning on actions
-- XP revocation on vote withdrawal
-- Daily XP limit (1000)
-- Single comment XP rule per topic
-- Minimum character rule
+- XP earning on actions (topic, vote, comment, like)
+- XP revocation on vote withdrawal, unlike, and author self-delete
+- Daily XP limit (1000, UTC-based)
+- Single comment XP rule per topic (metadata.topicId)
+- TOPIC_VOTE_RECEIVED unique-per-voter check (metadata.voterId)
+- Minimum character rule (with trim)
+- Race condition prevention (`withUserXpLock` — SELECT FOR UPDATE)
 - Automatic rank assignment
 - Displaying XP and rank info on user cards
+- Admin XP management (add, subtract, set — with audit trail)
+- XP reconciliation (daily cron job for drift detection)
 
 ## Tasks
 
@@ -31,12 +35,28 @@ This module has no controller — it does not expose API endpoints directly. It 
 
 **`xp.service.ts`** main methods:
 
+**Shared lock helper — `withUserXpLock(userId, callback)`:**
+
+Both `awardXp` and `revokeXp` modify `User.totalXp`. To prevent race conditions (concurrent award + revoke, or two concurrent awards exceeding the daily limit), all XP write operations use a shared locking mechanism:
+
+```
+async withUserXpLock<T>(userId: string, callback: (tx) => Promise<T>): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    // Acquire row-level lock on the User record
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+    return callback(tx);
+  });
+}
+```
+
+- Acquires a `SELECT ... FOR UPDATE` row-level lock on the target User record
+- Lock is held only for the duration of the transaction — other users' XP operations run in parallel
+- Both `awardXp` and `revokeXp` call their logic inside this helper, ensuring mutual exclusion
+- Admin XP adjustments (Task 5.1) also use this helper
+
 **`awardXp(userId, action, referenceType, referenceId, metadata?)`:**
 
-**Transaction strategy:** Steps 1-4 are read-only checks. Steps 5-7 are write operations. To prevent race conditions (e.g., two concurrent requests both passing the daily limit check), the entire operation runs inside a Prisma interactive `$transaction`:
-- At the start of the transaction, acquire a row-level lock on the User record using `SELECT ... FOR UPDATE` (via `prisma.$queryRaw`). This serializes all concurrent XP operations for the same user.
-- The lock is held only for the duration of this transaction — other users' XP operations run in parallel without contention.
-- Lock scope is narrow: only the target user's row is locked, not the entire table.
+Runs inside `withUserXpLock(userId, ...)`:
 
 1. Find the action from the `XpAction` table. If `isActive: false` → do not award XP
 2. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. If `dailyTotal + newXp > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit.
@@ -47,6 +67,9 @@ This module has no controller — it does not expose API endpoints directly. It 
 7. **Rank check:** `checkAndUpdateRank(userId)`
 
 **`revokeXp(userId, action, referenceType, referenceId)`:**
+
+Runs inside `withUserXpLock(userId, ...)`:
+
 1. Find the related record in the `XpLog` table
 2. If found → create a reverse XP log (negative points)
 3. Update `User.totalXp -= points` (minimum 0)
@@ -70,11 +93,11 @@ Add XP hooks to modules created in Phases 5, 6, and 7:
 - After casting a vote → `xpService.awardXp(userId, 'VOTE_CREATE', 'VOTE', voteId)`
 - After vote withdrawal → `xpService.revokeXp(userId, 'VOTE_CREATE', 'VOTE', voteId)`
 - Vote change → no additional XP (existing XP is preserved)
-- When a vote is received on a topic → `xpService.awardXp(topic.authorId, 'TOPIC_VOTE_RECEIVED', 'TOPIC', topicId)` **with unique per voter-topic check:** before awarding, check if this specific voter has already triggered `TOPIC_VOTE_RECEIVED` XP for this topic (check `XpLog` for `userId=topic.authorId, action=TOPIC_VOTE_RECEIVED, referenceId=topicId` with metadata containing `voterId`). If yes → do not award again. This prevents XP farming via vote/withdraw/re-vote cycles.
+- When a vote is received on a topic → `xpService.awardXp(topic.authorId, 'TOPIC_VOTE_RECEIVED', 'TOPIC', topicId, { voterId: currentUser.id })` **with unique per voter-topic check:** before awarding, check if this specific voter has already triggered `TOPIC_VOTE_RECEIVED` XP for this topic (check `XpLog` for `userId=topic.authorId, action=TOPIC_VOTE_RECEIVED, referenceId=topicId` with metadata containing `voterId`). If yes → do not award again. This prevents XP farming via vote/withdraw/re-vote cycles.
 - When a vote is withdrawn, the topic owner's `TOPIC_VOTE_RECEIVED` XP: not revoked (the voter's own XP is revoked). Since the unique-per-voter check prevents re-awarding, farming is blocked without needing revocation.
 
 **Comment Module (Phase 7):**
-- After comment creation → `xpService.awardXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
+- After comment creation → `xpService.awardXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId, { topicId })` — metadata includes `topicId` for single-comment-per-topic check
 - After comment deletion by author → `xpService.revokeXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
 - After comment deletion by moderator → XP is preserved (no revocation)
 - When a comment is liked → `xpService.awardXp(comment.authorId, 'COMMENT_LIKE_RECEIVED', 'COMMENT_LIKE', commentLikeId)`
@@ -150,9 +173,9 @@ Flow:
 1. Validate request (points > 0, reason required, max 500 chars)
 2. Check target user exists and is not deleted
 3. Inside a Prisma `$transaction` with `SELECT ... FOR UPDATE` on User row:
-   - **ADD:** Create XpLog with `action=ADMIN_ADJUST`, `points=+requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "ADD" }`
-   - **SUBTRACT:** Create XpLog with `action=ADMIN_ADJUST`, `points=-requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "SUBTRACT" }`. Ensure `User.totalXp` does not go below 0.
-   - **SET:** Calculate difference (`requestedPoints - currentTotalXp`), create XpLog with the difference as points, `metadata={ reason, adjustedBy: adminUserId, type: "SET", previousXp: currentTotalXp }`
+   - **ADD:** Create XpLog with `action=ADMIN_ADJUST`, `referenceType=USER`, `referenceId=targetUserId`, `points=+requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "ADD" }`
+   - **SUBTRACT:** Create XpLog with `action=ADMIN_ADJUST`, `referenceType=USER`, `referenceId=targetUserId`, `points=-requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "SUBTRACT" }`. Ensure `User.totalXp` does not go below 0.
+   - **SET:** Calculate difference (`requestedPoints - currentTotalXp`), create XpLog with `referenceType=USER`, `referenceId=targetUserId`, the difference as points, `metadata={ reason, adjustedBy: adminUserId, type: "SET", previousXp: currentTotalXp }`
 4. Update `User.totalXp` accordingly
 5. Run `checkAndUpdateRank(userId)` — rank may change after XP adjustment
 6. Log the action in ActivityLog (security/moderation category — 1 year retention)
@@ -166,12 +189,19 @@ Flow:
 **Rank list caching:** Rank queries used in `checkAndUpdateRank()` should be cached (`@CacheTTL(3600)`). Invalidate cache when admin updates rank settings.
 
 ## Security Checklist
-- [ ] Daily XP limit cannot be bypassed
-- [ ] Multiple comment XP for the same topic is not awarded
-- [ ] Minimum character check cannot be bypassed
+- [ ] Daily XP limit cannot be bypassed (UTC-based, checked within transaction lock)
+- [ ] Multiple comment XP for the same topic is not awarded (metadata.topicId check)
+- [ ] Minimum character check uses `trim()` — whitespace-only bypass prevented
 - [ ] XP revocation does not produce negative total XP (min 0)
 - [ ] XP logs cannot be manipulated (created by the system only)
-- [ ] Admin endpoints are only open to the ADMIN role
+- [ ] `withUserXpLock` is used by both `awardXp` and `revokeXp` — no race conditions
+- [ ] Concurrent XP operations for the same user are serialized (SELECT FOR UPDATE)
+- [ ] TOPIC_VOTE_RECEIVED unique-per-voter check prevents vote/withdraw/re-vote farming (metadata.voterId)
+- [ ] Author self-delete always revokes XP regardless of role (moderator included)
+- [ ] Admin XP adjustment endpoint is only open to ADMIN role (not MODERATOR)
+- [ ] Admin XP adjustments are exempt from daily limit but fully logged (ActivityLog + XpLog)
+- [ ] Admin XP adjustment requires mandatory reason field for audit trail
+- [ ] XP reconciliation cron job detects and corrects totalXp drift
 
 ## Test Plan
 
@@ -221,16 +251,49 @@ POST /comments/:id/like → like
 # 9. Is rank visible in responses?
 GET /users/:username → is rank info present?
 GET /topics/:id → is rank present in author card?
+
+# 10. Admin XP adjustment
+PATCH /admin/users/:id/xp { type: "ADD", points: 100, reason: "test" } (admin) → 200, totalXp increased
+PATCH /admin/users/:id/xp { type: "SUBTRACT", points: 50, reason: "test" } (admin) → 200, totalXp decreased
+PATCH /admin/users/:id/xp { type: "SET", points: 5000, reason: "test" } (admin) → 200, totalXp set to 5000
+PATCH /admin/users/:id/xp (moderator) → 403
+PATCH /admin/users/:id/xp { points: 100 } (no reason) → 400
+# Does rank update after XP adjustment?
+# Is ActivityLog entry created?
+# Is XpLog entry created with referenceType=USER?
+
+# 11. Race condition test
+# Two concurrent awardXp calls for the same user → totalXp correct? (no daily limit bypass?)
+# Concurrent awardXp + revokeXp → totalXp consistent?
+
+# 12. Metadata checks
+# Comment XP → does XpLog contain metadata.topicId?
+# TOPIC_VOTE_RECEIVED → does XpLog contain metadata.voterId?
+# Vote/withdraw/re-vote → is TOPIC_VOTE_RECEIVED awarded only once per voter-topic?
+
+# 13. Unlike XP revocation
+DELETE /comments/:id/like → is COMMENT_LIKE_RECEIVED XP revoked?
+
+# 14. Moderator self-delete
+# Moderator deletes own topic → XP revoked (author rule applies)
+# Moderator deletes other user's topic → XP preserved
 ```
 
 ## Completion Criteria
 - [ ] Topic creation, voting, commenting awards XP
 - [ ] Receiving likes awards XP
 - [ ] Vote withdrawal revokes XP
-- [ ] Daily 1000 XP limit works
-- [ ] Single comment XP per topic rule works
-- [ ] Minimum character rule works
+- [ ] Unlike revokes COMMENT_LIKE_RECEIVED XP
+- [ ] Daily 1000 XP limit works (UTC-based)
+- [ ] Single comment XP per topic rule works (metadata.topicId)
+- [ ] TOPIC_VOTE_RECEIVED unique-per-voter works (metadata.voterId)
+- [ ] Minimum character rule works (with trim)
 - [ ] Rank is automatically assigned
 - [ ] Rank is visible on user cards
+- [ ] `withUserXpLock` prevents race conditions (concurrent test passes)
+- [ ] Author self-delete revokes XP regardless of role
 - [ ] Admin XP/Rank configuration endpoints work
+- [ ] Admin XP adjustment (ADD/SUBTRACT/SET) works
+- [ ] Admin XP adjustment is logged and auditable
+- [ ] XP reconciliation cron job is configured
 - [ ] All tests pass
