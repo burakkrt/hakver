@@ -178,6 +178,7 @@ Under `apps/api/src/modules/mail/`:
 
 **Templates:**
 - `email-verification.tsx` — Verification code email. Platform logo, short message, 6-digit code, expiration time info.
+- `welcome.tsx` — Welcome email sent after successful email verification. Content: "Hakver'e Hoş Geldiniz!", brief platform introduction, first steps (1. Bir konuya oy verin, 2. İlk konunuzu açın), link to home page. Sent via BullMQ queue (async, fire-and-forget).
 
 **Async email processing with BullMQ:**
 - Install `@nestjs/bullmq` + `bullmq`

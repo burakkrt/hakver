@@ -103,6 +103,7 @@ user/
 | GET | /users/:username/comments | Public | Topics the user commented on |
 | GET | /users/me/profile-status | JWT | Profile completion status (which fields are missing) |
 | GET | /avatars | Public | Available avatar list (cached — `@CacheTTL(3600)`, invalidate on admin avatar changes) |
+| POST | /users/me/data-export | JWT + Verified | Request personal data export (KVKK) |
 
 ### 5. Profile Viewing Privacy Rules
 
@@ -170,7 +171,27 @@ When `DELETE /users/me` is called:
 6. Votes by the deleted user are preserved (vote counts remain accurate).
 7. All active sessions are invalidated (future: token blacklist)
 
-### 11. Username Availability Check
+### 11. KVKK Personal Data Export
+
+`POST /users/me/data-export`:
+1. Rate limit: 1 request per 7 days per user
+2. Create a BullMQ job to compile the user's personal data:
+   - Profile info (name, email, username, dateOfBirth, gender, bio)
+   - Topics created (title, content, dates)
+   - Comments written (content, dates)
+   - Votes cast (topic, type, dates)
+   - XP history (action, points, dates)
+   - Likes given/received
+   - Block list
+   - Consent records
+3. Generate a JSON file with all data
+4. Send download link via email (Resend) — link valid for 24 hours
+5. Response: 202 Accepted `{ message: "Verileriniz hazırlanıyor, email adresinize gönderilecek" }`
+6. Email template: `data-export.tsx` — download link + expiration info
+
+**Security:** Download link uses a signed JWT token (24-hour expiry). File is temporarily stored and auto-deleted after download or expiry.
+
+### 12. Username Availability Check
 
 `GET /users/check-username/:username` — Public endpoint. Checks if a username is available. Response: `{ available: boolean }`. Rate limited (10 requests/minute).
 

@@ -34,6 +34,10 @@
 `src/hooks/use-comments.ts`:
 - `useComments(topicId, filters)` → GET /topics/:topicId/comments (query)
 - `useCommentReplies(commentId)` → GET /comments/:commentId/replies (query, paginated — for "X yanıt daha" expansion)
+- `useBookmarkTopic()` → POST /topics/:id/bookmark (mutation)
+- `useUnbookmarkTopic()` → DELETE /topics/:id/bookmark (mutation)
+- `usePinTopic()` → PATCH /topics/:id/pin (mutation, moderator+)
+- `useUserSearch(query)` → GET /users/search?q={query}&limit=5 (query, debounced — for @mention autocomplete)
 - `useCreateComment()` → POST /topics/:topicId/comments (mutation)
 - `useUpdateComment()` → PATCH /comments/:id (mutation)
 - `useDeleteComment()` → DELETE /comments/:id (mutation)
@@ -58,7 +62,7 @@
 
 **Structure:**
 - Top: Category filters (horizontal scroll, chips: "Tümü", "Genel", "İlişkiler")
-- Sorting: "En Yeni" / "Popüler" tab or toggle
+- Sorting: "En Yeni" / "Popüler" / "Trend" tab or toggle. Default: "Trend" (time-weighted engagement score)
 - Topic card list (card grid or list view)
 
 **Topic card component** (`src/components/topic/topic-card.tsx`):
@@ -71,6 +75,8 @@
 - Vote indicator: if authenticated, a small colored dot or icon showing the user's vote (green dot = Hakli, red dot = Haksiz, no dot = not voted). This comes from the `myVote` field in the topic list API response.
 - Image thumbnail (if available, first image)
 - Date (relative: "2 saat önce")
+- Bookmark icon (filled if bookmarked, click to toggle)
+- Pinned badge (if isPinned — "Sabitlenmiş" label, pinned topics shown at top of list)
 - Card click → navigate to topic detail
 
 **Infinite scroll:** Automatically load next page when approaching the bottom.
@@ -93,7 +99,7 @@
 - Author card (or anonymous card)
 - Category badge
 - Date + "düzenlendi" label (if applicable)
-- Action menu (if topic owner: Edit, Delete | everyone: Share, Report, Mute)
+- Action menu (if topic owner: Edit, Delete | everyone: Share, Report, Mute, Bookmark | moderator+: Pin/Unpin)
 
 *Voting section:*
 - Two large buttons: "Haklı" (green tone) and "Haksız" (red tone)
@@ -109,6 +115,7 @@
 *Comment section:*
 - Comment input area (textarea + emoji picker + anonymous switch)
 - Anonymous switch: choice is made on the first comment, then locked (disabled + explanation tooltip)
+- @mention autocomplete: typing `@` shows dropdown with matching usernames (debounced 300ms). Selected username inserted as `@username`. Mentioned usernames rendered as highlighted links to user profiles.
 - Sorting: "En Beğenilen" / "En Yeni" toggle
 - Comment list (level 1 comments, replies under each)
 

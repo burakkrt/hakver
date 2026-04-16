@@ -238,8 +238,32 @@ curl https://[backend-url]/api/v1/health
 - NestJS Pino logger: structured JSON logs visible in Railway
 
 **To be added later (optional):**
-- Sentry (error tracking)
+- Sentry or similar error tracking (when a free/affordable option becomes available)
 - Uptime monitoring (UptimeRobot or similar)
+
+### 9.2. Database Backup Strategy
+
+**Supabase backup policy:**
+- **Free plan:** Daily automatic backups, retained for 7 days. No Point-in-Time Recovery (PITR).
+- **Pro plan ($25/mo):** Daily backups + PITR (up to 7 days). Recommended for production.
+- **Important:** Free plan backups are not downloadable via UI — use `pg_dump` for manual backups.
+
+**Manual backup procedure:**
+```bash
+# Run from local machine or CI
+pg_dump $DIRECT_URL --format=custom --file=backup_$(date +%Y%m%d).dump
+```
+
+**Restore procedure:**
+```bash
+pg_restore --clean --if-exists -d $DIRECT_URL backup_20260416.dump
+```
+
+**Recommendations:**
+- Before every production migration: run manual `pg_dump` backup
+- Monthly restore test: restore backup to a test database, verify data integrity
+- Production launch: upgrade to Supabase Pro plan for PITR
+- Document backup/restore procedure in a runbook (repo wiki or docs/)
 
 ### 10. Production Migration Strategy
 

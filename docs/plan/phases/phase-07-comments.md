@@ -151,7 +151,33 @@ A soft-deleted comment is returned in this format:
 
 This way the comment tree is not broken, and the user sees a "this comment was deleted" message.
 
-### 9. WebSocket Events
+### 9. @Mention System
+
+When a comment is created or edited, the backend parses the content for `@username` patterns and creates notifications for mentioned users.
+
+**Backend parsing:**
+1. Extract all `@username` patterns from comment content using regex: `/(?<!\w)@([a-zA-Z0-9_]{3,30})(?!\w)/g`
+2. Validate each username: check if user exists and is not deleted
+3. Filter out: self-mention (author mentioning themselves), blocked users (mutual block), duplicate mentions (same user mentioned multiple times → notify once)
+4. For each valid mention: create a `MENTIONED` notification (see Phase 10)
+
+**On comment edit:**
+- Re-parse the updated content for @mentions
+- Compare with previous mentions (from the original content)
+- Only notify NEW mentions (users who were not mentioned in the previous version)
+- Do NOT re-notify users who were already mentioned
+
+**Anonymous comment + @mention:**
+- If the commenter is anonymous, the notification is sent with the anonymous card (e.g., "Anonim Penguen #4521 sizi bir yorumda etiketledi")
+- The mentioned user does NOT learn who the anonymous commenter is
+
+**Frontend autocomplete:**
+- When user types `@` in the comment textarea, show a dropdown with matching usernames (debounced, 300ms, min 1 character after @)
+- Autocomplete calls `GET /users/search?q={query}&limit=5` (new lightweight endpoint or reuse existing)
+- Selected username is inserted into the textarea as `@username`
+- Mentioned usernames are visually highlighted in rendered comments (link to user profile)
+
+### 10. WebSocket Events
 
 Additional events to the gateway set up in Phase 6:
 - `comment:created` → `{ topicId, comment }` — when a new comment is posted

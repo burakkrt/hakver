@@ -72,6 +72,7 @@ Add notification hooks to existing modules:
 - When a comment is posted → `TOPIC_COMMENTED` notification to topic owner
 - When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner
 - When a like is given → `COMMENT_LIKED` notification to comment owner
+- When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card if anonymous comment).
 
 ### 5. Notification Listing
 
@@ -115,6 +116,7 @@ Add notification hooks to existing modules:
 - `TOPIC_COMMENTED`: "{actor} konunuza yorum yaptı"
 - `COMMENT_LIKED`: "{actor} yorumunuzu beğendi"
 - `COMMENT_REPLIED`: "{actor} yorumunuza yanıt verdi"
+- `MENTIONED`: "{actor} sizi bir yorumda etiketledi"
 
 ### 6. WebSocket Notification Delivery
 

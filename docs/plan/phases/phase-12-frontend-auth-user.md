@@ -50,6 +50,8 @@ On error → show error message via toast.
 - `useUserComments(username)` → GET /users/:username/comments (query)
 - `useProfileStatus()` → GET /users/me/profile-status (query — returns which fields are missing for profile completion)
 - `useBlockedUsers()` → GET /users/me/blocked (query — list of users the current user has blocked)
+- `useRequestDataExport()` → POST /users/me/data-export (mutation — KVKK personal data export)
+- `useMyBookmarks()` → GET /users/me/bookmarks (query, paginated — bookmarked topics)
 
 ### 3. Register Page (`/register`)
 
@@ -127,6 +129,7 @@ Modal or full page:
 - Topics: list of topics created by the user
 - Votes: topics the user voted on (only visible on own profile)
 - Comments: topics the user commented on
+- Kaydedilenler: bookmarked topics (only visible on own profile)
 
 Each tab is paginated, with infinite scroll or a "Load more" button.
 
@@ -164,6 +167,11 @@ Sections:
 - List of blocked users (avatar, username, block date)
 - "Engeli Kaldır" button per user → calls `DELETE /users/:username/block`
 - Empty state: "Engellediğiniz kullanıcı yok"
+
+**Veri Dışa Aktarma (KVKK):**
+- "Verilerimi İndir" button
+- Clicking sends `POST /users/me/data-export` → success toast: "Verileriniz hazırlanıyor, email adresinize gönderilecek"
+- Disabled state with countdown if already requested within 7 days
 
 **Account Deletion:**
 - Red "Hesabımı Sil" button

@@ -176,7 +176,40 @@ Check across all pages:
 - [ ] Skip to content link works
 - [ ] Button and link semantics used correctly (clickable → button, navigation → link)
 
-### 12. Responsive Polish
+### 12. PostHog Event Tracking
+
+Add event tracking to key user actions (PostHog provider set up in Phase 11):
+- `topic_viewed` — when user opens a topic detail page
+- `topic_created` — when user creates a new topic
+- `vote_cast` — when user votes (with vote type)
+- `comment_created` — when user posts a comment
+- `search_performed` — when user searches (with query)
+- `bookmark_toggled` — when user bookmarks/unbookmarks a topic
+- `share_clicked` — when user clicks a share button (with platform)
+
+PostHog tracking respects cookie consent: only fires events if analytics consent is given.
+
+### 12.1. Cookie Consent Note
+
+**MVP behavior:** The app uses localStorage for JWT tokens and essential session data only — no analytics or tracking cookies. A cookie consent banner is NOT required for MVP launch.
+
+**When analytics is added:** If PostHog (or any analytics tool) is enabled, a cookie consent banner must be shown:
+- Component: `src/components/shared/cookie-consent.tsx`
+- Position: bottom bar, first visit
+- Options: "Kabul Et" (all cookies) / "Sadece Zorunlu" (no analytics)
+- Consent stored in localStorage: `cookie-consent: "all" | "essential"`
+- PostHog only initializes if consent is `"all"`
+
+### 12.2. Static Pages (MDX)
+
+"Hakkımızda" and "SSS (Sıkça Sorulan Sorular)" pages are static content managed via MDX files in the Next.js project:
+- `src/app/about/page.mdx` — About page
+- `src/app/faq/page.mdx` — FAQ page
+- MDX files are committed to the repo and deployed with the app
+- No admin CMS needed — content changes require a deploy
+- Server Component rendering for SEO
+
+### 13. Responsive Polish
 
 Final check for all pages:
 - Mobile (375px) — primary

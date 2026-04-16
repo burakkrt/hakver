@@ -166,6 +166,15 @@ Tokens are stored in `localStorage`. With Zustand persist middleware.
 **`src/components/shared/seo-head.tsx`**:
 - Helper for dynamic meta tags (title, description, OG)
 
+### 11.1. PostHog Analytics Provider
+
+**`src/providers/posthog-provider.tsx`**:
+- PostHog client initialization with `NEXT_PUBLIC_POSTHOG_KEY` (project ID: 160520, EU Cloud) and `NEXT_PUBLIC_POSTHOG_HOST` (`https://eu.i.posthog.com`)
+- Auto page view tracking enabled
+- Wrap in root layout (after cookie consent check — only initialize if analytics consent given)
+- User identification: after login, call `posthog.identify(userId, { username, email })`. On logout, call `posthog.reset()`
+- Respects cookie consent: if user has not accepted analytics cookies, PostHog is not initialized
+
 ### 12. Vitest Setup
 
 Vitest + React Testing Library setup for `apps/web`:

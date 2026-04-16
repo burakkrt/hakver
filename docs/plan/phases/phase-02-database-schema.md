@@ -39,7 +39,7 @@ AuthProvider: LOCAL, GOOGLE
 VoteType: RIGHT, WRONG
 ReportTargetType: TOPIC, COMMENT, USER
 ReportStatus: PENDING, REVIEWED, RESOLVED, DISMISSED
-NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED
+NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED
 ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER
 ```
 
@@ -133,6 +133,9 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | voteCountWrong | Int | default 0, denormalized |
 | commentCount | Int | default 0, denormalized |
 | coverImageId | FK → TopicImage? | null = first image is cover |
+| isPinned | Boolean | default false |
+| pinnedAt | DateTime? | when the topic was pinned |
+| pinnedById | FK → User? | moderator/admin who pinned |
 | deletedAt | DateTime? | soft delete |
 
 #### TopicImage
@@ -272,6 +275,15 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | referenceType | ReferenceType enum | |
 | referenceId | UUID | |
 | isRead | Boolean | default false |
+
+#### TopicBookmark
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| userId | FK → User | |
+| topicId | FK → Topic | |
+| createdAt | DateTime | default now |
+| | | @@unique([userId, topicId]) |
 
 #### NotificationMute
 | Field | Type | Constraint |

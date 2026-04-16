@@ -66,7 +66,7 @@
 - categorySlug: string (optional)
 - page: number, default 1, min 1
 - limit: number, default 20, min 1, max 50
-- sort: "newest" | "popular" (optional, default "newest")
+- sort: "newest" | "popular" | "trending" (optional, default "newest")
 - search: string (optional, min 2 characters)
 
 `packages/shared/src/schemas/category.ts`:
@@ -129,6 +129,10 @@ topic/
 | DELETE | /topics/:id/images/:imageId | JWT + Verified | Remove image |
 | PATCH | /topics/:id/cover | JWT + Verified | Set cover image (author only, within editableUntil) |
 | GET | /topics/search | Public | Search topics by title (ILIKE query, paginated) — same query params as topic list + `search` parameter |
+| POST | /topics/:id/bookmark | JWT + Verified | Bookmark topic |
+| DELETE | /topics/:id/bookmark | JWT + Verified | Remove bookmark |
+| GET | /users/me/bookmarks | JWT | My bookmarked topics (paginated) |
+| PATCH | /topics/:id/pin | Moderator+ | Pin/unpin topic |
 
 ### 6. Topic Creation Flow
 
@@ -191,7 +195,11 @@ Image add and remove operations follow the same 12-hour editing window (`editabl
 - Pagination: offset-based (`page`, `limit`)
 - Filtering: `categorySlug` (optional)
 - Search: `search` query parameter (optional) — PostgreSQL ILIKE on title field. Minimum 2 characters.
-- Sorting: `newest` (createdAt DESC) or `popular` (voteCountRight + voteCountWrong DESC)
+- Sorting:
+  - `newest`: `createdAt DESC`
+  - `popular`: `voteCountRight + voteCountWrong DESC`
+  - `trending`: time-weighted engagement score — `(voteCountRight + voteCountWrong + commentCount) / pow(hoursSinceCreation + 2, 1.5) DESC`. Calculated in-query using PostgreSQL `EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 3600` for hours. This ensures recent topics with high engagement rank above old topics with accumulated votes.
+- Pinned topics always appear at the top regardless of sort order: `ORDER BY isPinned DESC, {selected sort}`
 - `deletedAt: null` filter (soft delete middleware)
 - For each topic: id, title, content (truncated 200 char), author card (or anonymous card), category, vote counts, comment count, image count, createdAt
 - If authenticated: `myVote: "RIGHT" | "WRONG" | null` — the current user's vote on this topic (requires a batch query or LEFT JOIN on the Vote table)
