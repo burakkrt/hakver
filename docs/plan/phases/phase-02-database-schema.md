@@ -203,6 +203,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | points | Int | positive = earned, negative = revoked |
 | referenceType | ReferenceType enum | |
 | referenceId | UUID | related entity ID |
+| metadata | Json? | additional context (e.g., `{ topicId }` for comment XP, `{ voterId }` for vote-received XP, `{ reason, adjustedBy }` for admin adjustments) |
 
 #### Rank
 | Field | Type | Constraint |
@@ -369,6 +370,7 @@ Under `apps/api/src/prisma/`:
 - VOTE_CREATE: 5 points
 - COMMENT_LIKE_RECEIVED: 2 points
 - TOPIC_VOTE_RECEIVED: 1 point
+- ADMIN_ADJUST: 0 points (actual points are set per request by admin — this action is exempt from daily XP limits)
 
 **Ranks:**
 - Çaylak: 0 XP

@@ -179,6 +179,7 @@ The following scheduled jobs run in the backend (`@nestjs/schedule`):
 | Activity Log Cleanup | Daily 03:00 AM | Delete regular activity logs > 90 days, security logs > 1 year |
 | Notification Cleanup | Daily 03:30 AM | Delete notifications > 90 days |
 | Expired Restriction Cleanup | Daily 04:00 AM | Clean up expired restriction records (optional, soft cleanup) |
+| XP Reconciliation | Daily 04:30 AM | Compare User.totalXp with SUM(XpLog.points), fix drift, log corrections |
 
 These are configured in a `ScheduleModule` within the backend. Ensure Railway keeps at least one instance running for cron jobs to execute.
 

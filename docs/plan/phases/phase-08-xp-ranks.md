@@ -31,12 +31,18 @@ This module has no controller — it does not expose API endpoints directly. It 
 
 **`xp.service.ts`** main methods:
 
-**`awardXp(userId, action, referenceType, referenceId)`:**
+**`awardXp(userId, action, referenceType, referenceId, metadata?)`:**
+
+**Transaction strategy:** Steps 1-4 are read-only checks. Steps 5-7 are write operations. To prevent race conditions (e.g., two concurrent requests both passing the daily limit check), the entire operation runs inside a Prisma interactive `$transaction`:
+- At the start of the transaction, acquire a row-level lock on the User record using `SELECT ... FOR UPDATE` (via `prisma.$queryRaw`). This serializes all concurrent XP operations for the same user.
+- The lock is held only for the duration of this transaction — other users' XP operations run in parallel without contention.
+- Lock scope is narrow: only the target user's row is locked, not the entire table.
+
 1. Find the action from the `XpAction` table. If `isActive: false` → do not award XP
-2. **Daily limit check:** Calculate the user's total XP earned today (`createdAt >= start of today`) from the `XpLog` table. If `totalXp + newXp > 1000` → do not award XP (skip silently, do not return error)
-3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → is this the user's first comment on this topic? Check `XpLog` for `(userId, action=COMMENT_CREATE, referenceType=COMMENT)` entries related to this topic. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again for a new comment on the same topic. If a positive entry exists → do not award XP
-4. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's character count less than 10? If yes → do not award XP
-5. Create `XpLog` record (positive points)
+2. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. If `dailyTotal + newXp > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit.
+3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → check `XpLog` for existing positive entries with `(userId, action=COMMENT_CREATE)` and `metadata.topicId === currentTopicId`. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again. If a positive entry exists → do not award XP. The `metadata` JSON field stores `{ topicId }` to avoid joining the Comment table.
+4. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's **trimmed** character count less than 10? If yes → do not award XP. `trim()` prevents bypass via whitespace-only content.
+5. Create `XpLog` record (positive points, with `metadata` if provided — e.g., `{ topicId }` for comments, `{ voterId }` for TOPIC_VOTE_RECEIVED)
 6. Update `User.totalXp += points`
 7. **Rank check:** `checkAndUpdateRank(userId)`
 
@@ -87,7 +93,7 @@ When content is soft-deleted, XP handling depends on who performed the deletion:
 - Topic deleted by moderator → XP is NOT revoked (the user produced content, moderator enforced rules)
 - Comment deleted by moderator → XP is NOT revoked
 
-**Implementation:** The `deleteBy` context (author vs moderator) is passed to the XP service. Use the `comment:delete` and `topic:delete` permission check result to determine the actor type. If the actor is the author (`authorId === currentUser.id`), revoke XP. If the actor has `topic:delete` or `comment:delete` permission (moderator/admin), keep XP.
+**Implementation:** The `deleteBy` context (author vs moderator) is passed to the XP service. The rule is: **"If the actor is the content author (`authorId === currentUser.id`), always revoke XP — regardless of the actor's role."** This means a moderator who deletes their OWN topic/comment loses XP, just like any other user. The moderator privilege only applies when deleting SOMEONE ELSE's content — in that case, the content author's XP is preserved. This prevents XP farming by any user, including moderators.
 
 ### 4. Displaying Rank Info in Responses
 
@@ -121,6 +127,41 @@ Since XP values are managed from the database, admin endpoints:
 | PATCH | /admin/ranks/:id | Admin | Update rank |
 
 These endpoints are infrastructure only; the admin panel frontend will be built in Phase 15.
+
+### 5.1. Admin XP Management
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| PATCH | /admin/users/:id/xp | Admin | Adjust user's XP (add, subtract, or set) |
+| GET | /admin/users/:id/xp-logs | Admin | User's XP history (paginated) |
+
+**`PATCH /admin/users/:id/xp`** — Admin XP adjustment:
+
+Request body:
+```json
+{
+  "type": "ADD" | "SUBTRACT" | "SET",
+  "points": 5000,
+  "reason": "Topluluk katkısı ödülü"
+}
+```
+
+Flow:
+1. Validate request (points > 0, reason required, max 500 chars)
+2. Check target user exists and is not deleted
+3. Inside a Prisma `$transaction` with `SELECT ... FOR UPDATE` on User row:
+   - **ADD:** Create XpLog with `action=ADMIN_ADJUST`, `points=+requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "ADD" }`
+   - **SUBTRACT:** Create XpLog with `action=ADMIN_ADJUST`, `points=-requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "SUBTRACT" }`. Ensure `User.totalXp` does not go below 0.
+   - **SET:** Calculate difference (`requestedPoints - currentTotalXp`), create XpLog with the difference as points, `metadata={ reason, adjustedBy: adminUserId, type: "SET", previousXp: currentTotalXp }`
+4. Update `User.totalXp` accordingly
+5. Run `checkAndUpdateRank(userId)` — rank may change after XP adjustment
+6. Log the action in ActivityLog (security/moderation category — 1 year retention)
+
+**Security:**
+- Daily XP limit (1000) does NOT apply to admin adjustments
+- Only ADMIN role can use this endpoint (not MODERATOR)
+- Every adjustment is logged with admin identity, reason, and previous/new XP values
+- Reason field is mandatory for audit trail
 
 **Rank list caching:** Rank queries used in `checkAndUpdateRank()` should be cached (`@CacheTTL(3600)`). Invalidate cache when admin updates rank settings.
 

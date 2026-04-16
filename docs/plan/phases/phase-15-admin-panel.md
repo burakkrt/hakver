@@ -157,6 +157,13 @@ Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL
 **User detail** (`/users/[username]`):
 - Profile info (all fields, no masking — admin can see everything)
 - Role badges
+- **XP Management section (Admin only):**
+  - Current XP and rank display
+  - XP adjustment form: type selector (Ekle / Çıkar / Ayarla), points input, reason textarea (mandatory)
+  - "Ekle" adds points, "Çıkar" subtracts, "Ayarla" sets to exact value
+  - Recent XP log table (last 20 entries — action, points, date, metadata)
+  - Success toast with new XP value and rank after adjustment
+  - Calls `PATCH /admin/users/:id/xp` (Phase 8 Task 5.1)
 - Active restrictions list
 - Recent activity log (last 20 entries for this user)
 - Recent reports against this user

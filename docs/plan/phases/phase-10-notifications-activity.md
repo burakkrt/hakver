@@ -205,6 +205,15 @@ The `action` field in the `ActivityLog` table is used to classify log type. Secu
 - Notifications older than 90 days are automatically deleted by the same cron job
 - This prevents the `Notification` table from growing unboundedly
 
+**XP reconciliation** (daily at 04:30 AM UTC):
+- Compare `User.totalXp` with `SUM(XpLog.points)` for all active users
+- If a drift is detected (values don't match):
+  1. Correct `User.totalXp` to match the actual `SUM(XpLog.points)` (minimum 0)
+  2. Run `checkAndUpdateRank()` for affected users
+  3. Create an ActivityLog entry with action `xp:reconciliation`, metadata including `{ userId, previousXp, correctedXp, drift }`
+- Log the total number of reconciled users for monitoring
+- This catches any drift caused by partial transaction failures, bugs, or edge cases
+
 ### 10. Topic Detail Response Update
 
 Add `isMuted` field to the `GET /topics/:id` response created in Phase 5:

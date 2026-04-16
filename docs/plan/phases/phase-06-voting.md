@@ -49,12 +49,12 @@ Under `apps/api/src/modules/vote/`:
 3. **Duplicate vote check:** `(userId, topicId)` unique constraint in `Vote` table. If vote already exists → 409 "Bu konuya zaten oy verdiniz"
 4. **Profile completion check:** `ProfileCompleteGuard` ensures the voter's profile is complete (guard chain order: JWT → Verified → ProfileComplete → Restriction → Permission)
 5. **Restriction check:** check for active restriction on `vote:create` action
-5. Create vote record
-6. Update denormalized counter on Topic:
+6. Create vote record
+7. Update denormalized counter on Topic:
    - `type === RIGHT` → `voteCountRight += 1`
    - `type === WRONG` → `voteCountWrong += 1`
-7. **Emit WebSocket event:** `vote:updated` → `{ topicId, voteCountRight, voteCountWrong }`
-8. Response: `{ vote, topic: { voteCountRight, voteCountWrong } }`
+8. **Emit WebSocket event:** `vote:updated` → `{ topicId, voteCountRight, voteCountWrong }`
+9. Response: `{ vote, topic: { voteCountRight, voteCountWrong } }`
 
 **Denormalized counter update** must be done inside a Prisma `$transaction` — vote creation and counter update must be atomic.
 
