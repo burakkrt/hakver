@@ -182,7 +182,7 @@ Vitest + React Testing Library setup for `apps/web`:
 - Skip to content link (hidden in header, visible on Tab)
 - `alt` text required on all images
 
-### 15. Route Structure Preparation
+### 14. Route Structure Preparation
 
 App Router directory structure (empty page files, content in subsequent phases):
 

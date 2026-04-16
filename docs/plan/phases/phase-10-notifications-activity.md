@@ -24,6 +24,19 @@ notification/
 └── notification.gateway.ts
 ```
 
+### 1.1. Shared Notification Response Schema
+
+In `packages/shared/src/schemas/notification.ts`:
+
+**NotificationResponseSchema** (response DTO):
+- id: UUID
+- type: NotificationType enum
+- isRead: boolean
+- createdAt: ISO date string
+- actor: `UserPublicResponseSchema | AnonymousCardSchema`
+- reference: `{ type: ReferenceType, id: UUID, title?: string }`
+- message: string (Turkish, user-facing — generated from type + actor)
+
 ### 2. API Endpoints
 
 | Method | Path | Auth | Description |

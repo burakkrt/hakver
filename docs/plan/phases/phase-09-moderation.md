@@ -106,6 +106,8 @@ The guard whose infrastructure was set up in Phase 4 is activated here. On every
 4. Self-report check (if targetType is USER) → 400
 5. Create `Report` record (status: PENDING)
 
+**Rate limiting:** Report creation endpoint (`POST /reports`) is rate limited to 5 requests per minute per user to prevent spam reports and moderator workload abuse.
+
 **Report listing (moderator):**
 - Filtering: status (PENDING, REVIEWED, RESOLVED, DISMISSED), targetType
 - Sorting: createdAt DESC

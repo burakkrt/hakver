@@ -139,7 +139,7 @@ auth/
 3. Profile info from Google: `email`, `firstName`, `lastName`, `providerId`
 4. Search for existing user by email:
    - **User exists, provider: GOOGLE** → log in, return tokens
-   - **User exists, provider: LOCAL** → error: "Bu email zaten kayıtlı, şifre ile giriş yapın"
+   - **User exists, provider: LOCAL** → error: "Bu email adresi ile zaten bir hesabınız var. Lütfen şifrenizle giriş yapın." (error code: `AUTH_OAUTH_EMAIL_CONFLICT`). Frontend must display this error clearly to the user with a link/button to the login page.
    - **User doesn't exist** → create new user (`provider: GOOGLE`, `emailVerifiedAt: now()`, `username: null`)
 5. If username is null → `requiresProfileCompletion: true` flag in response
 6. Client redirects to profile completion page based on this flag
@@ -222,10 +222,15 @@ Uses `@nestjs/throttler` with `@nestjs/throttler-storage-redis` for distributed 
 - Auth endpoints: 5 requests / minute (IP-based)
 - Email delivery: 1 request / 60 seconds (user-based)
 
+**Redis failure strategy (layered approach):**
+- **Auth endpoints** (login, register, verify-email, forgot-password): **fail-closed** — if Redis is unavailable, return 503 Service Unavailable. Security takes priority; brute-force protection must not be bypassed.
+- **All other endpoints**: **fail-open** — if Redis is unavailable, allow the request without rate limiting. Service availability takes priority for short Redis outages.
+- Implementation: wrap the Redis throttler storage with a try-catch. On Redis connection error, check if the endpoint is in the auth fail-closed list.
+
 ### 14. CORS Configuration
 
 CORS settings in `main.ts`:
-- Origin: `FRONTEND_URL`
+- Origin: `[FRONTEND_URL, ADMIN_URL]` (array — allows both frontend and admin panel origins)
 - Credentials: true
 - Allowed headers: `Content-Type`, `Authorization`
 

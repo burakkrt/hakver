@@ -18,6 +18,40 @@
 
 `packages/shared/src/schemas/topic.ts`:
 
+**TopicResponseSchema** (response DTO — used in topic detail, topic list items, and WebSocket events):
+- id: UUID
+- title: string
+- content: string
+- slug: string
+- isAnonymous: boolean
+- isEdited: boolean
+- editableUntil: ISO date string
+- voteCountRight: number
+- voteCountWrong: number
+- commentCount: number
+- category: `{ id, name, slug }`
+- author: `UserPublicResponseSchema | AnonymousCardSchema` (based on isAnonymous)
+- images: `{ id, url, sortOrder }[]`
+- coverImage: `{ id, url }` | null
+- myVote: `"RIGHT" | "WRONG" | null` (only when authenticated)
+- isOwnTopic: boolean (only when authenticated and topic is anonymous)
+- isMuted: boolean (only when authenticated, from Phase 10)
+- createdAt: ISO date string
+
+**TopicListItemSchema** (truncated version for list endpoints):
+- id, title, slug, isAnonymous, voteCountRight, voteCountWrong, commentCount, category, author, coverImage, myVote, createdAt
+- content: string (truncated to 200 characters)
+
+`packages/shared/src/schemas/category.ts`:
+
+**CategoryResponseSchema** (response DTO):
+- id: UUID
+- name: string
+- slug: string
+- description: string | null
+- isActive: boolean
+- sortOrder: number
+
 **CreateTopicSchema:**
 - title: min 5, max 150 characters
 - content: min 50, max 3000 characters
@@ -53,6 +87,7 @@ Under `apps/api/src/modules/upload/`:
   - Maximum size: 5 MB
   - Allowed MIME types: `image/jpeg`, `image/png`, `image/webp`
   - GIF not accepted
+  - **Magic bytes validation:** Use the `file-type` npm package to verify the actual file content matches the declared MIME type. MIME type from the request header can be spoofed — magic bytes (file signature) provide reliable validation. Check magic bytes BEFORE uploading to Cloudinary to prevent unnecessary traffic.
 - Cloudinary upload options: `folder: "hakver/topics"`, automatic format conversion, quality optimization
 
 ### 3. Category Module
@@ -61,7 +96,7 @@ Under `apps/api/src/modules/category/`:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | /categories | Public | Active category list |
+| GET | /categories | Public | Active category list (cached — `@CacheTTL(3600)`, invalidate on admin category changes) |
 | POST | /categories | Admin | Create new category |
 | PATCH | /categories/:id | Admin | Update category |
 | DELETE | /categories/:id | Admin | Deactivate category (soft) |
@@ -99,19 +134,19 @@ topic/
 
 1. Validation with `CreateTopicSchema`
 2. **New user prerequisite check:** Verify the user has cast at least 1 vote (check for records in the Vote table). If not → 403 "Konu açabilmek için en az bir konuya oy vermeniz gerekiyor"
-3. **Restriction check:** `restriction.guard` checks for active restrictions (`topic:create` action)
-3.1. **Profile completion check:** `ProfileCompleteGuard` ensures username, firstName, lastName are not null
-4. Check if category exists and `isActive: true`
-5. Create topic:
+3. **Profile completion check:** `ProfileCompleteGuard` ensures username, firstName, lastName are not null (guard chain order: JWT → Verified → ProfileComplete → Restriction → Permission)
+4. **Restriction check:** `restriction.guard` checks for active restrictions (`topic:create` action)
+5. Check if category exists and `isActive: true`
+6. Create topic:
    - `slug` field is auto-generated from the title (Turkish character support, unique — appends `-2`, `-3` on collision)
    - `editableUntil = createdAt + 12 hours`
    - `voteCountRight = 0`, `voteCountWrong = 0`, `commentCount = 0`
-6. If `isAnonymous: true` → create `AnonymousIdentity` record:
+7. If `isAnonymous: true` → create `AnonymousIdentity` record:
    - Select a random `iconType` from the animal list
    - Generate a random 4-digit number
    - `displayName = "Anonim {Animal} #{number}"` (e.g.: "Anonim Penguen #4521")
-7. Return the topic with its ID
-8. **Cover photo:** If images are uploaded, the first image (`sortOrder: 0`) is automatically set as the cover photo (`topic.coverImageId`). The author can change the cover selection via `PATCH /topics/:id/cover` within the editing window.
+8. Return the topic with its ID
+9. **Cover photo:** If images are uploaded, the first image (`sortOrder: 0`) is automatically set as the cover photo (`topic.coverImageId`). The author can change the cover selection via `PATCH /topics/:id/cover` within the editing window.
 
 **Animal list** (for anonymous identities):
 Penguen, Baykuş, Tilki, Panda, Koala, Yunus, Kelebek, Kartal, Kurt, Aslan, Kedi, Tavşan, Sincap, Flamingo, Papağan
@@ -129,6 +164,10 @@ Penguen, Baykuş, Tilki, Panda, Koala, Yunus, Kelebek, Kartal, Kurt, Aslan, Kedi
 File received via multipart form-data (`@nestjs/platform-express` Multer).
 
 Image add and remove operations follow the same 12-hour editing window (`editableUntil`) as text editing. After the window expires, images cannot be added or removed.
+
+**Image removal:** When an image is explicitly removed via `DELETE /topics/:id/images/:imageId`, the image is also deleted from Cloudinary (`uploadService.deleteImage(publicId)`). This prevents orphan files and unnecessary Cloudinary storage usage. Note: when a topic is soft-deleted, images are NOT removed from Cloudinary (soft delete consistency).
+
+**Rate limiting:** Image upload endpoint (`POST /topics/:id/images`) is rate limited to 10 requests per minute per user to prevent Cloudinary quota abuse.
 
 ### 8. Topic Editing
 

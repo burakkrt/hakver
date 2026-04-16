@@ -81,7 +81,7 @@ apps/api/
 ```
 
 **`main.ts`** configuration:
-- CORS: origin from `FRONTEND_URL` environment variable
+- CORS: origin from `[FRONTEND_URL, ADMIN_URL]` environment variables (array — allows both frontend and admin panel origins)
 - Global prefix: `api/v1`
 - Global validation pipe (Zod-based)
 - Global exception filter
@@ -89,7 +89,7 @@ apps/api/
 - Port: from `PORT` environment variable
 - `nestjs-pino` logger integration
 
-**`configuration.ts`** — Centrally manage all environment variables with `@nestjs/config`. Apply runtime validation with Zod — throw an error before the application starts if an env variable is missing or invalid.
+**`configuration.ts`** — Centrally manage all environment variables with `@nestjs/config`. Apply runtime validation with Zod — throw an error before the application starts if an env variable is missing or invalid. Must validate `ADMIN_URL` alongside other required variables.
 
 **Health endpoint** — `GET /api/v1/health` → `{ status: "ok", timestamp }`. For deployment verification.
 
@@ -149,7 +149,7 @@ packages/shared/
 - `TOPIC_*`: NOT_FOUND, EDIT_EXPIRED, PREREQUISITE_NOT_MET
 - `VOTE_*`: ALREADY_VOTED, SELF_VOTE, NOT_FOUND
 - `COMMENT_*`: EDIT_COOLDOWN, ANONYMOUS_LOCKED
-- `USER_*`: RESTRICTED, BLOCKED, CHANGE_COOLDOWN
+- `USER_*`: NOT_FOUND, RESTRICTED, BLOCKED, CHANGE_COOLDOWN, PROFILE_INCOMPLETE
 - `REPORT_*`: ALREADY_REPORTED, SELF_REPORT
 
 **`websocket-events.ts`** — WebSocket event names and payload types:
@@ -171,6 +171,8 @@ Create `.env.example` files with placeholder values in the repository. Actual va
 - `apps/web/.env.example` — All frontend variables with placeholder values
 
 `.env.example` files are committed to the repo with placeholder values. `docs/environments.md` and `.env` files must be in `.gitignore`.
+
+**Actual `.env` files** must be created during initial setup using the values from `docs/environments.md`. Each developer creates their own `.env` files by copying `.env.example` and filling in the real values from `docs/environments.md`.
 
 ### 8. Redis Cache Module
 
@@ -210,7 +212,7 @@ Detailed `nestjs-pino` configuration:
 - [ ] `.env` files are in `.gitignore`
 - [ ] `docs/environments.md` and all `.env` files are in `.gitignore` — only `.env.example` files with placeholder values are committed
 - [ ] `configuration.ts` prevents application startup on missing env variables
-- [ ] CORS only allows `FRONTEND_URL`
+- [ ] CORS only allows `FRONTEND_URL` and `ADMIN_URL`
 - [ ] Swagger is only active in development mode
 
 ## Test Plan

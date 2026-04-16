@@ -321,6 +321,18 @@ Additional indexes for performance:
 - `ActivityLog`: `(userId, createdAt DESC)` — activity queries
 - `Notification`: `(userId, isRead, createdAt DESC)` — unread notifications
 - `UserRestriction`: `(userId, expiresAt)` — active restriction check
+- `UserBlock`: `(blockedId)` — reverse block lookup for symmetric block checks
+
+### 4.1. Search Index (pg_trgm)
+
+Enable the `pg_trgm` PostgreSQL extension and create a GIN index for topic title search:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_topic_title_trgm ON "Topic" USING gin (title gin_trgm_ops);
+```
+
+This is added via a Prisma migration using raw SQL. The `pg_trgm` GIN index dramatically speeds up `ILIKE` queries used in topic search (Phase 5). Without this index, `ILIKE` performs a full table scan. Supabase PostgreSQL supports `pg_trgm` natively.
 
 ### 5. PrismaService
 
@@ -341,7 +353,7 @@ Under `apps/api/src/prisma/`:
 
 **Role-Permission mappings:**
 - ADMIN → all permissions
-- MODERATOR → topic:edit, topic:delete, comment:delete, user:restrict, user:view-anonymous, report:review
+- MODERATOR → topic:delete, comment:delete, user:restrict, user:view-anonymous, report:review
 - USER → topic:create, comment:create, vote:create
 
 **Categories:**

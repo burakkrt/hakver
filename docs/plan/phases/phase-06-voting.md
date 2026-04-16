@@ -17,6 +17,13 @@
 
 `packages/shared/src/schemas/vote.ts`:
 
+**VoteResponseSchema** (response DTO):
+- vote: `{ id, type: "RIGHT" | "WRONG", createdAt }`
+- topic: `{ voteCountRight: number, voteCountWrong: number }`
+
+**MyVoteResponseSchema** (for `GET /topics/:topicId/votes/me`):
+- type: `"RIGHT" | "WRONG" | null`
+
 **CreateVoteSchema:**
 - topicId: UUID
 - type: "RIGHT" | "WRONG"
@@ -40,8 +47,8 @@ Under `apps/api/src/modules/vote/`:
 1. Validation with `CreateVoteSchema`
 2. **Own topic check:** `topic.authorId === currentUser.id` → 403 "Kendi konunuza oy veremezsiniz"
 3. **Duplicate vote check:** `(userId, topicId)` unique constraint in `Vote` table. If vote already exists → 409 "Bu konuya zaten oy verdiniz"
-4. **Restriction check:** check for active restriction on `vote:create` action
-4.1. **Profile completion check:** `ProfileCompleteGuard` ensures the voter's profile is complete
+4. **Profile completion check:** `ProfileCompleteGuard` ensures the voter's profile is complete (guard chain order: JWT → Verified → ProfileComplete → Restriction → Permission)
+5. **Restriction check:** check for active restriction on `vote:create` action
 5. Create vote record
 6. Update denormalized counter on Topic:
    - `type === RIGHT` → `voteCountRight += 1`

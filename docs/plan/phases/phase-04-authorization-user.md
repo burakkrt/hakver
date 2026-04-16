@@ -102,7 +102,7 @@ user/
 | GET | /users/:username/votes | JWT (self only) | Topics the user voted on |
 | GET | /users/:username/comments | Public | Topics the user commented on |
 | GET | /users/me/profile-status | JWT | Profile completion status (which fields are missing) |
-| GET | /avatars | Public | Available avatar list |
+| GET | /avatars | Public | Available avatar list (cached — `@CacheTTL(3600)`, invalidate on admin avatar changes) |
 
 ### 5. Profile Viewing Privacy Rules
 
@@ -165,8 +165,10 @@ When `DELETE /users/me` is called:
    - `providerId = null`
    - `dateOfBirth` → set to epoch date
 3. `deletedAt = now()` is set
-4. Topics and comments created by the user are preserved but displayed with a "deleted user" profile card
-5. All active sessions are invalidated (future: token blacklist)
+4. Topics and comments created by the user are preserved but displayed with an anonymous "Silinmiş Kullanıcı" profile card. All non-anonymous topics and comments by this user are retroactively displayed as anonymous (author info hidden). Anonymous content continues to show its existing AnonymousIdentity (e.g., "Anonim Penguen #4521").
+5. `AnonymousIdentity` records are preserved — they reference the anonymized user via FK. Since the user is soft-deleted, the unique constraint `(userId, topicId)` will not be violated (deleted users cannot create new content).
+6. Votes by the deleted user are preserved (vote counts remain accurate).
+7. All active sessions are invalidated (future: token blacklist)
 
 ### 11. Username Availability Check
 

@@ -48,6 +48,8 @@ On error → show error message via toast.
 - `useUserTopics(username)` → GET /users/:username/topics (query)
 - `useUserVotes(username)` → GET /users/:username/votes (query, only on own profile)
 - `useUserComments(username)` → GET /users/:username/comments (query)
+- `useProfileStatus()` → GET /users/me/profile-status (query — returns which fields are missing for profile completion)
+- `useBlockedUsers()` → GET /users/me/blocked (query — list of users the current user has blocked)
 
 ### 3. Register Page (`/register`)
 
@@ -156,6 +158,12 @@ Sections:
 **Password:**
 - Current password + new password form
 - This section is hidden for OAuth users
+
+**Blocked Users:**
+- "Engellenen Kullanıcılar" section
+- List of blocked users (avatar, username, block date)
+- "Engeli Kaldır" button per user → calls `DELETE /users/:username/block`
+- Empty state: "Engellediğiniz kullanıcı yok"
 
 **Account Deletion:**
 - Red "Hesabımı Sil" button

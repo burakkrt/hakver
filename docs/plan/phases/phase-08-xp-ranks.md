@@ -34,7 +34,7 @@ This module has no controller — it does not expose API endpoints directly. It 
 **`awardXp(userId, action, referenceType, referenceId)`:**
 1. Find the action from the `XpAction` table. If `isActive: false` → do not award XP
 2. **Daily limit check:** Calculate the user's total XP earned today (`createdAt >= start of today`) from the `XpLog` table. If `totalXp + newXp > 1000` → do not award XP (skip silently, do not return error)
-3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → is this the user's first comment on this topic? Check topics of comments related to `(userId, action=COMMENT_CREATE, referenceType=COMMENT)` in the `XpLog` table. Has XP already been earned for the same topic? If yes → do not award XP
+3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → is this the user's first comment on this topic? Check `XpLog` for `(userId, action=COMMENT_CREATE, referenceType=COMMENT)` entries related to this topic. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again for a new comment on the same topic. If a positive entry exists → do not award XP
 4. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's character count less than 10? If yes → do not award XP
 5. Create `XpLog` record (positive points)
 6. Update `User.totalXp += points`
@@ -64,14 +64,15 @@ Add XP hooks to modules created in Phases 5, 6, and 7:
 - After casting a vote → `xpService.awardXp(userId, 'VOTE_CREATE', 'VOTE', voteId)`
 - After vote withdrawal → `xpService.revokeXp(userId, 'VOTE_CREATE', 'VOTE', voteId)`
 - Vote change → no additional XP (existing XP is preserved)
-- When a vote is received on a topic → `xpService.awardXp(topic.authorId, 'TOPIC_VOTE_RECEIVED', 'TOPIC', topicId)`
-- When a vote is withdrawn, the topic owner's XP: not revoked (only the voter's XP is revoked)
+- When a vote is received on a topic → `xpService.awardXp(topic.authorId, 'TOPIC_VOTE_RECEIVED', 'TOPIC', topicId)` **with unique per voter-topic check:** before awarding, check if this specific voter has already triggered `TOPIC_VOTE_RECEIVED` XP for this topic (check `XpLog` for `userId=topic.authorId, action=TOPIC_VOTE_RECEIVED, referenceId=topicId` with metadata containing `voterId`). If yes → do not award again. This prevents XP farming via vote/withdraw/re-vote cycles.
+- When a vote is withdrawn, the topic owner's `TOPIC_VOTE_RECEIVED` XP: not revoked (the voter's own XP is revoked). Since the unique-per-voter check prevents re-awarding, farming is blocked without needing revocation.
 
 **Comment Module (Phase 7):**
 - After comment creation → `xpService.awardXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
 - After comment deletion by author → `xpService.revokeXp(userId, 'COMMENT_CREATE', 'COMMENT', commentId)`
 - After comment deletion by moderator → XP is preserved (no revocation)
 - When a comment is liked → `xpService.awardXp(comment.authorId, 'COMMENT_LIKE_RECEIVED', 'COMMENT_LIKE', commentLikeId)`
+- When a comment is unliked → `xpService.revokeXp(comment.authorId, 'COMMENT_LIKE_RECEIVED', 'COMMENT_LIKE', commentLikeId)` (consistent with vote withdrawal XP revocation)
 
 ### 3.1. XP Revocation on Content Deletion
 
@@ -119,7 +120,9 @@ Since XP values are managed from the database, admin endpoints:
 | GET | /admin/ranks | Admin | Rank list |
 | PATCH | /admin/ranks/:id | Admin | Update rank |
 
-These endpoints are infrastructure only; the admin panel frontend will be built in Phase 14 or a future version.
+These endpoints are infrastructure only; the admin panel frontend will be built in Phase 15.
+
+**Rank list caching:** Rank queries used in `checkAndUpdateRank()` should be cached (`@CacheTTL(3600)`). Invalidate cache when admin updates rank settings.
 
 ## Security Checklist
 - [ ] Daily XP limit cannot be bypassed

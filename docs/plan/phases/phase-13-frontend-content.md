@@ -33,6 +33,7 @@
 
 `src/hooks/use-comments.ts`:
 - `useComments(topicId, filters)` → GET /topics/:topicId/comments (query)
+- `useCommentReplies(commentId)` → GET /comments/:commentId/replies (query, paginated — for "X yanıt daha" expansion)
 - `useCreateComment()` → POST /topics/:topicId/comments (mutation)
 - `useUpdateComment()` → PATCH /comments/:id (mutation)
 - `useDeleteComment()` → DELETE /comments/:id (mutation)

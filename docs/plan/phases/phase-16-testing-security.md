@@ -162,6 +162,24 @@ Add `helmet` middleware to `main.ts` (if not already present):
 - X-XSS-Protection enabled
 - HSTS header (in production)
 
+**Content Security Policy (CSP) configuration:**
+```
+default-src 'self';
+script-src 'self';
+style-src 'self' 'unsafe-inline';
+img-src 'self' res.cloudinary.com data:;
+font-src 'self';
+connect-src 'self' {API_URL} {SOCKET_URL};
+frame-src 'none';
+object-src 'none';
+base-uri 'self';
+```
+- Cloudinary image domain whitelisted in `img-src`
+- API and WebSocket URLs whitelisted in `connect-src`
+- `frame-src 'none'` prevents clickjacking
+- Adjust as needed for Twemoji CDN, Google OAuth redirects, and other external resources
+- CSP violations should be logged (report-uri or report-to) for monitoring
+
 ### 5. Performance Check
 
 **Backend:**

@@ -19,6 +19,25 @@
 
 `packages/shared/src/schemas/comment.ts`:
 
+**CommentResponseSchema** (response DTO — used in REST responses and WebSocket `comment:created` event):
+- id: UUID
+- content: string | null (null if deleted)
+- isAnonymous: boolean
+- isEdited: boolean
+- isDeleted: boolean
+- lastEditedAt: ISO date string | null
+- likeCount: number
+- author: `UserPublicResponseSchema | AnonymousCardSchema | null` (null if deleted)
+- isLiked: boolean (only when authenticated — whether current user liked this comment)
+- replyCount: number (total reply count for level 1 comments)
+- replies: `CommentResponseSchema[]` (first 5 replies, only for level 1 comments)
+- createdAt: ISO date string
+- _moderatorInfo: `{ realAuthorId, realUsername }` (only for users with `user:view-anonymous` permission, only when isAnonymous)
+
+**AnonymousCardSchema** (shared anonymous identity response):
+- displayName: string (e.g., "Anonim Penguen #4521")
+- iconType: string (animal type)
+
 **CreateCommentSchema:**
 - content: min 1, max 1000 characters
 - parentId: UUID (optional — null = level 1, populated = level 2)
@@ -49,21 +68,21 @@ Under `apps/api/src/modules/comment/`:
 
 1. Validation with `CreateCommentSchema`
 2. Check if topic exists and `deletedAt: null`
-3. **Restriction check:** `comment:create` action
-3.1. **Profile completion check:** `ProfileCompleteGuard` ensures the commenter's profile is complete
-4. **Nesting check:**
+3. **Profile completion check:** `ProfileCompleteGuard` ensures the commenter's profile is complete (guard chain order: JWT → Verified → ProfileComplete → Restriction → Permission)
+4. **Restriction check:** `comment:create` action
+5. **Nesting check:**
    - `parentId` null → level 1 comment
    - `parentId` populated → does parent comment exist? Is the parent itself level 1? (is parentId null?) If parent is already a reply (parentId populated) → use parent's parent as `parentId` (keep at level 2)
-5. **Anonymous consistency check:**
+6. **Anonymous consistency check:**
    - Check if this user has previous comments on this topic
    - If yes: is the previous comment's `isAnonymous` value the same as the new comment's `isAnonymous` value? If different → 400 "Bu konudaki ilk yorumunuzda seçtiğiniz kimlik ayarını değiştiremezsiniz"
    - If no: first comment, choice is free
-6. If `isAnonymous: true` → check if a record exists in the `AnonymousIdentity` table for this user+topic:
+7. If `isAnonymous: true` → check if a record exists in the `AnonymousIdentity` table for this user+topic:
    - If exists: use existing anonymous identity
    - If not: create new anonymous identity (animal list from Phase 5 + number)
-7. Create comment record
-8. Update `topic.commentCount += 1` (transaction)
-9. WebSocket event: `comment:created` → `{ topicId, comment }` (to topic room)
+8. Create comment record
+9. Update `topic.commentCount += 1` (transaction)
+10. WebSocket event: `comment:created` → `{ topicId, comment: CommentResponseSchema }` (to topic room)
 
 ### 4. Comment Editing
 
@@ -103,7 +122,7 @@ Under `apps/api/src/modules/comment/`:
 - Comments with `parentId: null`
 - Sorting: `sort=popular` → `likeCount DESC, createdAt ASC` | `sort=newest` → `createdAt DESC`
 - For each comment: id, content (or null if deleted), author card (or anonymous card), isAnonymous, isEdited, likeCount, createdAt
-- Under each level 1 comment, **level 2 replies** are also returned (no separate pagination, limit: first 5 replies + total reply count)
+- Under each level 1 comment, **level 2 replies** are also returned (no separate pagination, limit: first 5 replies + total reply count). Use Prisma `include` for eager loading: `include: { replies: { take: 5, orderBy: { createdAt: 'asc' } } }` to avoid N+1 queries.
 
 **Level 2 reply expansion:**
 `GET /comments/:id/replies?page=1&limit=20` — Fetch all replies for a parent comment, paginated. First 5 replies are shown inline in the topic comment list, "X more replies" button calls this endpoint.
