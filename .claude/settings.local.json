@@ -1,5 +1,10 @@
 {
   "permissions": {
-    "allow": ["Bash(echo \"exit:$?\")"]
+    "allow": [
+      "Bash(echo \"exit:$?\")",
+      "mcp__plugin_figma_figma__whoami",
+      "mcp__plugin_figma_figma__create_new_file",
+      "mcp__plugin_figma_figma__use_figma"
+    ]
   }
 }

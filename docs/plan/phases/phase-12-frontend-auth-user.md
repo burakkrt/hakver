@@ -121,7 +121,7 @@ Modal or full page:
 - Avatar (large)
 - Username (prominent — the primary identifier)
 - Name displayed as "Ahmet D." (firstName full + lastName first character + ".") when viewing another user's profile. The owner of the profile sees their full surname instead
-- Age (calculated from dateOfBirth: `Math.floor((now - dob) / 365.25 / 24 / 60 / 60 / 1000)`)
+- Age rendered from the `age` integer returned by the backend (`UserPublicResponseSchema.age` for other users, `UserPrivateResponseSchema.age` for the owner — see Phase 4 Section 1). The raw `dateOfBirth` is never exposed on public responses, so the frontend does not compute the age itself and cannot fall back to the birth date
 - Bio
 - `<RankBadge rank={user.rank} size="lg" />` followed by an inline `<RankProgress />` (Phase 11 Section 11) showing distance to the next rank. The progress bar is fed by `currentXp = user.totalXp`, `currentRank = user.rank`, `nextRank = resolved client-side from the ranks cache by finding the lowest minXp > user.totalXp`. When the viewer holds the summit rank (Allâme) the progress bar collapses to a static "Zirve rütbeye ulaştınız" badge
 - Total XP label (`"{totalXp.toLocaleString('tr-TR')} XP"`) rendered next to the progress bar

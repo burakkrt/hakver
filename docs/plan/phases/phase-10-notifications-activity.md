@@ -80,6 +80,14 @@ In `packages/shared/src/schemas/notification.ts`:
 8. **Create a new record:** insert `Notification` (`aggregatedCount=1`, first actor row in `NotificationActor`). Emit `notification:new` WebSocket event
 9. **Anonymous actor** (L-9): when the actor acts anonymously (anonymous topic/comment author), aggregation is **mandatory** — a single anonymous actor never renders as a standalone identity card. Even one anonymous actor folds into the aggregated shape; the message format is always "Bir kullanıcı konunuza oy verdi" (single) or "N kullanıcı konunuza oy verdi" (multi), never the real anonymous display name like "Anonim Penguen #4521". This rule does **not** apply to `MENTIONED` (mention targets a specific user; the anonymous card is shown on that user's notification because the timing correlation risk is an accepted trade-off for explicit mentions). **Security note:** on `MENTIONED` notifications the anonymous actor's display name (e.g., "Anonim Penguen #4521") is returned only to the mentioned user; no other API response pairs this name with the comment. The frontend scrolls from the mention notification to the comment where the anonymous card is still rendered as anonymous — the real identity never leaks
 
+**`NotificationActor.isAnonymousForReference` computation (authoritative):** whenever a `NotificationActor` row is inserted (aggregation append in step 7 OR fresh record in step 8), the notification service writes the precomputed `isAnonymousForReference` flag in the same statement:
+- Reference type `TOPIC` (`TOPIC_VOTED`, `TOPIC_COMMENTED`): `isAnonymousForReference = Topic.isAnonymous OR EXISTS(SELECT 1 FROM "AnonymousIdentity" WHERE "userId" = :actorId AND "topicId" = :referenceId)`. Both branches are already loaded by the caller (the voting/commenting service already fetched the topic row; anonymous-identity creation happens right before the notification call), so no extra query is needed
+- Reference type `COMMENT` (`COMMENT_LIKED`, `COMMENT_REPLIED`): `isAnonymousForReference = triggeringComment.isAnonymous` — the comment being liked/replied-to is already loaded by the caller
+- Reference type `USER` (`ADMIN_BROADCAST`) and `RANK` (`RANK_UP`): `isAnonymousForReference = false` (broadcast and rank-up actors are never anonymous)
+- `MENTIONED`: the actor's anonymity is resolved from the comment containing the mention and stored on the actor row; the mention-side rendering rule from step 9 still applies at listing time
+
+The flag is written once at insert time so `Phase 10 Section 5` listing reads it directly without any join to `AnonymousIdentity` or `Comment`.
+
 **Actor hydration** (L-6): each element of the `actors` array in notification listings and WebSocket event payloads is **always** hydrated via `UserPublicCardSchema`. For soft-deleted actors the schema rule returns `isDeletedAuthor: true` and masks the card fields ("Silinmiş Kullanıcı" label, default "silinmis" avatar, rank omitted, `totalXp: 0`). Anonymous actors never appear hydrated in the array — when the actor is anonymous the record is flagged with `isAnonymousAggregate: true` and `actors` returns `[]` (see Section 5 and the L-9 security rule below). No code path leaks raw username / full name to the frontend.
 
 ### 3.1. Admin Broadcast Notification
@@ -163,7 +171,8 @@ Voting on or commenting on a topic does **not** subscribe a user to that topic's
 **Fan-out execution (BullMQ):**
 - The fan-out producer runs the single recipient query (`SELECT userId FROM TopicSubscription WHERE topicId = :topicId` joined with the exclusion filters above) and splits the result into **batches of 500 recipients**
 - Each batch is enqueued as its own BullMQ job (`topic-updated-fanout` queue). Jobs run in parallel with the worker concurrency limit
-- Each job inserts its batch of `Notification` rows in a single `createMany` and pushes WebSocket events to each online recipient
+- **Recipient recheck inside each job (authoritative):** immediately before the `createMany` call, the worker runs `SELECT id FROM "User" WHERE id IN (:batchIds) AND "deletedAt" IS NULL` and keeps only the rows that still resolve to active accounts. This closes the race where a recipient soft-deletes their account between producer enqueue and worker execution — KVKK requires that no new personal data (a notification row referencing the user) be written for a retired account. The same recheck pattern applies to the `admin-broadcast-fanout` worker (Section 3.1)
+- Each job then inserts the filtered batch of `Notification` rows in a single `createMany` and pushes WebSocket events to each online recipient
 - Failed jobs use the standard retry policy (3 attempts, exponential backoff) and fall back to the dead-letter queue
 - Chunking keeps individual transactions bounded, isolates batch failures, and lets the worker concurrency dictate throughput
 
@@ -210,6 +219,13 @@ Voting on or commenting on a topic does **not** subscribe a user to that topic's
 ```
 
 **`actors` field:** for an aggregated notification, the latest 3 actors (most recent `NotificationActor` rows) are returned hydrated via the card schema. If `aggregatedCount > 3`, the first 3 are shown and the rest is surfaced through the user-facing Turkish suffix "ve N diğer kullanıcı" inside the message. For single-actor notifications (`aggregatedCount === 1`) the `actors` array contains a single element.
+
+**Listing query plan (authoritative — avoids N+1):** the listing service runs **three bounded queries per page** regardless of page size:
+1. Notification page — standard paginated query: `SELECT ... FROM "Notification" WHERE "userId" = :me ORDER BY "updatedAt" DESC LIMIT :limit OFFSET :offset`. Collect the page's notification ids
+2. Actor rows for the whole page in one shot: `SELECT "notificationId", "actorId", "isAnonymousForReference", "createdAt" FROM "NotificationActor" WHERE "notificationId" IN (:pageIds) ORDER BY "notificationId", "createdAt" DESC`. In the service layer, group by `notificationId` and keep the top 3 per group. Collect the distinct `actorId` set across all groups
+3. Actor hydration in one batch: `SELECT ... FROM "User" WHERE id IN (:distinctActorIds)` — mapped to `UserPublicCardSchema` (with `isDeletedAuthor` propagation from Phase 4 Section 5.1)
+
+The service then assembles each notification's `actors` array from the hydrated user rows, derives `isAnonymousAggregate` as "every top-3 actor row carries `isAnonymousForReference = true`" (single pass over the already-loaded rows — no extra query), and emits the final payload. `RANK_UP` short-circuits this plan entirely because its `actors` array is always empty. This 3-query ceiling keeps the notification list fast regardless of how many aggregated rows each card carries.
 
 **`isStale` field** (L-4): during notification listing, if the `reference` target (topic or comment) is soft-deleted (`deletedAt IS NOT NULL`), the response flags `isStale: true`. The frontend renders the card grey/italic, disables navigation, or shows a toast "Bu içerik kaldırıldı" on click (details: Phase 14).
 
@@ -357,15 +373,16 @@ Activity log writes run **after the HTTP response has been sent**, never inside 
 - **Security & moderation logs** (restriction apply/remove, report create/review, block/unblock, account deletion, failed login attempts): **1 year** retention. Required for legal investigations and compliance (KVKK).
 - **Authentication logs** (login, logout, token refresh, password change): **1 year** retention. Required for fraud/abuse investigation.
 
-**Implementation:** A scheduled cron job (`@nestjs/schedule`) runs daily at 03:00 AM:
-1. Delete regular activity logs older than 90 days
-2. Delete security/moderation logs older than 1 year
-3. Log the cleanup count for monitoring
+**Implementation:** A scheduled cron job (`@nestjs/schedule`) runs daily at 03:00 AM. **Batched delete pattern (authoritative):** every cleanup step below deletes rows in chunks of 5000 inside its own short transaction, looping until a pass affects zero rows. The chunked shape matches the `XpLog` archival job (Section 9.2 and Phase 17 Section 7.1) and keeps long locks off the hot tables even when the backlog reaches millions of rows. Example SQL for each pass: `DELETE FROM "ActivityLog" WHERE id IN (SELECT id FROM "ActivityLog" WHERE createdAt < :cutoff AND <category predicate> LIMIT 5000)`.
+
+1. Delete regular activity logs older than 90 days — batched
+2. Delete security/moderation logs older than 1 year — batched
+3. Log the cumulative cleanup count for monitoring
 
 The `action` field in the `ActivityLog` table is used to classify log type. Security/moderation actions: `restriction:*`, `report:*`, `block:*`, `account:delete`, `auth:login-failed`. Everything else is regular, including `user:rank-up`.
 
 **Notification retention:**
-- Notifications older than 90 days are automatically deleted by the same cron job
+- Notifications older than 90 days are automatically deleted by the same cron job, using the same 5000-row batched delete pattern (each pass wrapped in its own short transaction)
 - This prevents the `Notification` table from growing unboundedly
 
 **XpLog hot/cold archival** (daily at 04:15 AM UTC):

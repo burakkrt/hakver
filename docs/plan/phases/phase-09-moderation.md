@@ -168,6 +168,8 @@ isBlocked(viewerId: string, targetId: string): Promise<boolean>
 ```
 Checks `UserBlock` for a row matching `(blockerId = viewerId AND blockedId = targetId)` OR `(blockerId = targetId AND blockedId = viewerId)`. Returns `true` if either direction exists. The helper is the single point of truth — every module calls it rather than hand-rolling the `OR` predicate, so a future change (e.g., block grace period, block tiers) only touches one file.
 
+**Authority-role bypass (authoritative):** when `viewerId` resolves to a user carrying an authority role (MODERATOR, ADMIN, or any future authority role), `isBlocked` short-circuits to `false` before touching the `UserBlock` table. Authority users see every regular user's content regardless of any block relationship the regular user has established, so a user cannot evade moderation by blocking every moderator. The role lookup uses the viewer's JWT-embedded role set (already loaded by the permission guard chain) so the check is constant-time. The one-directional asymmetry is intentional: the regular user's own feed still hides the authority user's personal activity (they can still express "I don't want to see this user's posts"), but the authority user's oversight surface is fully restored. Cross-reference: Phase 5 Section 11 "Symmetric block 404 rule" carries the same rule on the listing/detail side.
+
 The helper is also exposed as a `@WithBlockCheck('paramName')` decorator that modules can attach to controller handlers to short-circuit to `404 TOPIC_NOT_FOUND` (or the relevant resource's NOT_FOUND) automatically.
 
 ### 6. Admin Restriction Category Management

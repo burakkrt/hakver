@@ -70,6 +70,7 @@ apps/admin/
 - Email + password form (same as main app login)
 - No Google OAuth (admin login is email/password only for security)
 - After login → check user role: if `ADMIN` or `MODERATOR` → allow access, otherwise → "Yetkisiz erişim" error and redirect
+- **New device verification (authoritative):** authority-role logins trigger the Phase 3 Section 11.2 new-device flow. When `POST /auth/login` returns `202 Accepted` with `{ requiresDeviceVerification: true, deviceHash, message }`, the UI replaces the password form with a 6-digit OTP-style input screen labelled "Yeni cihaz doğrulaması — email adresinize kod gönderildi". Submit calls `POST /auth/verify-login-device` with `{ deviceHash, code, email, password }`; success continues to the dashboard redirect, failure surfaces `AUTH_INVALID_CODE` with a Turkish toast. Remembers the device for 30 days so subsequent logins from the same admin workstation skip the code step
 
 **Auth guard:**
 - All routes except `/login` are protected
@@ -133,6 +134,8 @@ AdminStatsResponseSchema = {
 **Implementation notes:**
 - Each counter is a single `COUNT` or date-bounded `COUNT` query; the five-minute Redis cache (`@CacheTTL(300)`, key `admin:stats`) absorbs dashboard refreshes without hitting the database on every poll
 - Recent activity pulls the latest 10 rows from `ActivityLog`, joined with `User` for the actor username
+- **`users.activeLast30Days` derivation (authoritative):** `SELECT COUNT(DISTINCT "userId") FROM "ActivityLog" WHERE "createdAt" >= now() - interval '30 days'`. Source is `ActivityLog` — no `lastActiveAt` column on `User` is needed. The 90-day activity-log retention (Phase 10 Section 9.1) comfortably covers the 30-day window
+- **`topics.activeLast30Days` derivation (authoritative):** `SELECT COUNT(DISTINCT "targetId") FROM "ActivityLog" WHERE "targetType" = 'TOPIC' AND "createdAt" >= now() - interval '30 days'` — counts topics that received any engagement (vote, comment, edit, update-note) in the window. A topic with no interaction in the last 30 days is not considered "active" for the dashboard purpose even if it was created earlier
 - Cache invalidation is TTL-based only — admins who need up-to-the-second figures can trigger a stats refresh via a "Yenile" button in the UI, which bypasses the cache with a `?nocache=1` query parameter accepted by this endpoint (still admin-guarded, rate-limited to 1 request per 10 seconds per admin)
 - Response DTO construction is handled in the service layer; no Prisma types leak
 

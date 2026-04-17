@@ -149,7 +149,7 @@ packages/shared/
 **`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType` (TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER, RANK). Every enum defined in the Prisma schema must also be defined here.
 
 **`error-codes.ts`** — Standard error codes. These codes are used in backend responses across all phases:
-- `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT, RESET_TOKEN_INVALID
+- `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT, RESET_TOKEN_INVALID, DEVICE_VERIFICATION_REQUIRED, INVALID_CODE
 - `VALIDATION_*`: INVALID_INPUT, DUPLICATE_USERNAME, DUPLICATE_EMAIL
 - `TOPIC_*`: NOT_FOUND, EDIT_EXPIRED, PREREQUISITE_NOT_MET, UPDATE_NOTE_NOT_FOUND, IMAGE_LIMIT_EXCEEDED
 - `VOTE_*`: ALREADY_VOTED, SELF_VOTE, NOT_FOUND

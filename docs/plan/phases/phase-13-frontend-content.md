@@ -75,6 +75,12 @@
 - Author card (user-card or anonymous-card)
 - Category badge
 - Vote status: Haklı / Haksız buttons + counts (small version)
+- **Majority verdict pill** (derived client-side from `voteCountRight` and `voteCountWrong`): renders as a small pill next to the counts. When total votes ≥ 10 (minimum engagement gate), compute `total = voteCountRight + voteCountWrong` and `rightRatio = voteCountRight / total`:
+  - `rightRatio ≥ 0.60` → green pill "%{round(rightRatio * 100)} Haklı"
+  - `rightRatio ≤ 0.40` → red/coral pill "%{round((1 - rightRatio) * 100)} Haksız"
+  - Otherwise → neutral pill "Kararsız"
+  - Total votes < 10 → pill is hidden entirely so early topics are not prematurely labeled
+  - No backend change — the pill is a pure render derivation from fields the card already receives. Adds a clear "Hakli/Haksiz" identity signal to each card at zero infrastructure cost
 - Comment count icon + count — renders `commentCount` (level-1 comments only). Replies are not included so the number on the card always matches the top-level comment rows the user sees when they open the topic
 - Vote indicator: if authenticated, a small colored dot or icon showing the user's vote (green dot = Hakli, red dot = Haksiz, no dot = not voted). This comes from the `myVote` field in the topic list API response.
 - Image thumbnail (if available, first image)
@@ -111,7 +117,7 @@
 
 *Voting section:*
 - Two large buttons: "Haklı" (green tone) and "Haksız" (red tone)
-- Vote counts + progress bar (percentage distribution)
+- Vote counts + progress bar (percentage distribution) — reuses the same percentage math as the topic card verdict pill (Section 2). On detail we always show the full percentage bar; the verdict pill from the card is additionally rendered above the buttons once `total ≥ 10` so the summary stays consistent across surfaces
 - Current user's vote highlighted
 - After voting → button highlight changes, counters update
 - Change vote → click the other button

@@ -72,16 +72,16 @@ auth/
 ### 3. JWT Strategy
 
 **Access Token:**
-- Payload: `{ sub: userId, email, username, isVerified: boolean }`
+- Payload: `{ sub: userId, email, username, isVerified: boolean, sv: number }` — `sv` is `User.sessionVersion` (Phase 2) embedded at issue time
 - Duration: `JWT_ACCESS_EXPIRATION` (15m)
 - Secret: `JWT_SECRET`
 - Transport to the frontend: returned inside the JSON response body. The frontend keeps it in memory (with an optional short-lived `sessionStorage` mirror that is cleared on tab close). It is **never** written to `localStorage`, because a successful XSS otherwise has full session take-over capability
 
 **Refresh Token:**
-- Payload: `{ sub: userId, tokenVersion: number }`
+- Payload: `{ sub: userId, sv: number }` — `sv` is the user's current `sessionVersion` at issue time
 - Duration: `JWT_REFRESH_EXPIRATION` (7d)
 - Secret: `JWT_REFRESH_SECRET`
-- `tokenVersion` is not stored in the database initially — simple stateless refresh. Token revocation can be added in the future.
+- Session revocation is driven by the `sv` claim (see Section 11.1). `/auth/refresh` rejects tokens whose `sv` is lower than the user's current `User.sessionVersion`, so a password/email change can cut all other sessions by incrementing that single integer. No per-token blacklist table is needed
 - Transport: the backend sets the refresh token as an **`httpOnly; Secure; SameSite=Strict`** cookie scoped to the auth path. JavaScript cannot read it, so XSS cannot exfiltrate it. The cookie's `Path` is locked to the auth endpoints (`/api/v1/auth`) so it is transmitted only when the browser calls `/auth/refresh` or `/auth/logout`. In development (`NODE_ENV=development`) the `Secure` flag is omitted so the cookie works over `http://localhost`; every other environment sets it
 
 **Cookie configuration (`main.ts`):**
@@ -98,7 +98,9 @@ auth/
 ```
 The refresh token is **not** in the JSON body — it ships in the `Set-Cookie` header as `refreshToken=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`.
 
-**Refresh flow:** the frontend calls `POST /auth/refresh` with `credentials: "include"`; the browser attaches the refresh cookie automatically. The backend verifies it, issues a new access token, rotates the refresh cookie (writes a new one with a fresh 7-day TTL), and returns the new access token in the response body. Token rotation limits the window in which a stolen refresh token could be reused.
+**Refresh flow:** the frontend calls `POST /auth/refresh` with `credentials: "include"`; the browser attaches the refresh cookie automatically. The backend verifies the signature, then compares the token's `sv` claim against `User.sessionVersion`; a mismatch returns 401 `{ code: "AUTH_TOKEN_EXPIRED" }` and clears the refresh cookie so the client falls back to the login page. On success the backend issues a new access token, rotates the refresh cookie (writes a new one with a fresh 7-day TTL and the current `sv`), and returns the new access token in the response body. Token rotation limits the window in which a stolen refresh token could be reused.
+
+**Concurrent refresh calls (multi-tab safety):** `apps/web` coalesces parallel refreshes into a single in-flight promise (Phase 11 Section 5). This prevents two simultaneous tabs from racing their `POST /auth/refresh` calls and causing one to overwrite the other's rotated cookie — only one request reaches the backend per refresh cycle.
 
 **Logout flow:** `POST /auth/logout` sets the refresh cookie to an empty value with `Max-Age=0`, effectively deleting it. The frontend also drops the in-memory access token.
 
@@ -111,6 +113,7 @@ The refresh token is **not** in the JSON body — it ships in the `Set-Cookie` h
 | POST | /auth/refresh | Public | Get new access token with refresh token |
 | POST | /auth/verify-email | JWT | Send email verification code |
 | POST | /auth/verify-email/confirm | JWT | Confirm verification code |
+| POST | /auth/verify-login-device | Public | Verify new-device code for authority-role login (Section 11.2) |
 | GET | /auth/google | Public | Initiate Google OAuth |
 | GET | /auth/google/callback | Public | Google OAuth callback |
 | POST | /auth/complete-profile | JWT | Complete profile after OAuth |
@@ -220,7 +223,7 @@ Under `apps/api/src/modules/mail/`:
 2. Look up the token in Redis. When the key is missing or the value does not resolve to an existing non-deleted user → return 400 `{ code: "AUTH_RESET_TOKEN_INVALID", message: "Bağlantının süresi dolmuş veya geçersiz" }` so the frontend can render the expired-link screen
 3. New password validation (same rules as RegisterSchema)
 4. Hash password with bcrypt, update the user's `passwordHash`
-5. Delete the token from Redis (single-use) and invalidate every active refresh token of the user (forces other sessions to re-login with the new password)
+5. Delete the token from Redis (single-use) and call `invalidateOtherSessions(userId, { reason: "password-reset" })` (Section 11.1) — increments `User.sessionVersion` so every other live session fails its next refresh and is forced back to the login page
 6. Response: 200
 
 **Frontend behaviour** (Phase 12):
@@ -229,6 +232,59 @@ Under `apps/api/src/modules/mail/`:
 - On `AUTH_RESET_TOKEN_INVALID`: render a dedicated "Bağlantının süresi dolmuş" screen with a single CTA "Yeni bağlantı al" that re-opens the Step 1 form
 
 **Email template:** `password-reset.tsx` — Turkish copy, reset link using the fragment form, explicit "15 dakika içinde kullanılmalı" note, small footer clarifying "Bu isteği siz yapmadıysanız dikkate almayın".
+
+### 11.1. Session Invalidation Helper (`invalidateOtherSessions`)
+
+Security-critical account changes (password reset, password change, email change, future 2FA enrolment) must be able to revoke other live sessions. Without a per-token table, revocation is driven by a monotonic `User.sessionVersion` counter (Phase 2) that every issued JWT embeds as the `sv` claim. A single integer per user is enough — no token-tracking table, no stateful refresh-chain infrastructure.
+
+**Contract:** `invalidateOtherSessions(userId: string, { reason: "password-reset" | "password-change" | "email-change" }): Promise<{ accessToken: string; refreshTokenCookie: string }>`
+
+**Behavior:**
+1. `UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE id = :userId RETURNING *` — atomic at row level, no `FOR UPDATE` needed
+2. Issue a fresh access + refresh token pair carrying the new `sv` value so the caller's current session continues seamlessly
+3. Write an ActivityLog entry: `action = "auth:sessions-invalidated"`, `metadata: { reason }` (security/moderation category, 1 year retention per Phase 10 Section 9.1)
+4. Return the token pair to the controller; the controller sets the new refresh cookie and returns the new access token in the response body
+
+**Effect on other live sessions:**
+- Any other device holding an older-`sv` access token keeps working until its 15-minute expiry (acceptable minor window — the access token is short-lived by design)
+- The next `/auth/refresh` from that device compares the refresh token's `sv` against the updated `User.sessionVersion`, fails, returns 401 `AUTH_TOKEN_EXPIRED`, clears the refresh cookie, and the device is forced back to the login page
+
+**Callers (MVP):**
+- `POST /auth/reset-password` (Section 11) — `reason: "password-reset"`
+- `PATCH /users/me/email` (Phase 4 Section 7) — `reason: "email-change"`
+- `PATCH /users/me/password` (Phase 4 Section 8) — `reason: "password-change"`
+
+Future callers (2FA enrolment, phone attach, admin role change impact on the affected user) adopt the same helper without schema changes.
+
+### 11.2. New Device Login Verification (Authority Roles)
+
+Admin and moderator logins carry higher impact than regular-user logins (role assignment, XP adjustment, broadcast dispatch), so MVP adds an email-code verification step whenever an authority account logs in from a device that has not been seen for this user in the last 30 days. Regular-user new-device verification is deferred to post-MVP; the infrastructure below will extend there when rolled out.
+
+**Device fingerprint:** `deviceHash = SHA-256(userId + userAgent + truncatedIp)` where `truncatedIp` collapses the request IP to its `/24` (IPv4) or `/64` (IPv6) subnet so natural ISP-assigned rotations do not re-trigger verification every session.
+
+**Storage:** Redis key `trusted-device:{userId}:{deviceHash}` with TTL 30 days. Presence means the device has passed verification for this user within the last 30 days. Verification code storage: `login-device-verify:{userId}:{deviceHash}` with TTL 10 minutes.
+
+**Login flow (authority accounts only — USER role logs in normally):**
+1. After password/OAuth verification succeeds (Section 5 / Section 7), check the caller's roles. If the user holds `ADMIN` or `MODERATOR` → continue to step 2; otherwise issue tokens normally and return
+2. Compute `deviceHash`. If `trusted-device:{userId}:{deviceHash}` exists → issue tokens normally and return
+3. Otherwise: generate a 6-digit code, store it at the `login-device-verify:*` key, and enqueue an email via the existing `mail.service.ts` (new template `login-device-verify.tsx` — Turkish copy: "Yeni cihazdan giriş isteği. Doğrulama kodu: XXXXXX. 10 dakika içinde kullanılmalı")
+4. Respond with `202 Accepted` and body `{ requiresDeviceVerification: true, deviceHash, message: "Giriş için email adresinize gönderilen kodu girin" }`. No access or refresh tokens are issued yet; the response does not set the refresh cookie
+5. Client submits the code via `POST /auth/verify-login-device` with `{ deviceHash, code, email, password }` (the re-authentication fields protect against session fixation — the backend re-verifies credentials before accepting the code). On match: delete the verification code from Redis, write `trusted-device:{userId}:{deviceHash}` with 30-day TTL, issue the normal token pair
+6. Wrong code: 400 `{ code: "AUTH_INVALID_CODE", message: "Doğrulama kodu geçersiz" }`. A Redis counter tracks failures; 5 failed attempts per `(userId, deviceHash)` within the 10-minute window locks the attempt and invalidates the code — the admin must start the login again and wait for a new code
+
+**Endpoints:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | /auth/verify-login-device | Public | Verify the new-device code; issue full session on success |
+
+**Error codes (added to `error-codes.ts` in Phase 1):**
+- `AUTH_DEVICE_VERIFICATION_REQUIRED` — login response flag for the client to show the code input screen
+- `AUTH_INVALID_CODE` — wrong code on the verify endpoint
+
+**Admin panel (Phase 15):** the admin login screen consumes this API automatically — when the login response carries `requiresDeviceVerification: true`, the UI swaps to the 6-digit input form, keeps the email/password in state, and calls `POST /auth/verify-login-device` with the captured values. After success, the standard dashboard redirect runs.
+
+**Rate limits:** the auth endpoint's 5 rpm IP limit from Section 13 already bounds code generation. The 5-attempt lock on the verify endpoint prevents code brute-forcing.
 
 ### 12. Input Sanitization
 

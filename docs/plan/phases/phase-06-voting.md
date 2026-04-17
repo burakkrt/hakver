@@ -100,6 +100,8 @@ Under `apps/api/src/websocket/`:
 - Invalid or expired token → connection rejected (`socket.disconnect()`)
 - When token is refreshed, client must `reconnect` (to be handled in frontend)
 
+**Server-side token expiry timer (authoritative):** each authenticated connection is armed on `handleConnection` with a `setTimeout` that fires exactly when the access token's `exp` claim is reached (`(exp * 1000) - Date.now()` ms). On fire, the server emits an `auth:expired` event and calls `socket.disconnect(true)`. This closes the window where a stale access token keeps a socket listening after its 15-minute expiry; the client-side `AuthProvider` (Phase 11 Section 7) already reconnects with the rotated access token, so the disconnect is transparent to the user. Also evaluates the token's `sv` claim against `User.sessionVersion` on connect — a mismatch (because a password/email change invalidated sessions) refuses the connection with the same disconnect pattern. The timer is cleared on normal `handleDisconnect` to avoid leaks.
+
 **Events:**
 - Server → Client: `vote:updated` → `{ topicId, voteCountRight, voteCountWrong }`
 - Event names and payload types are imported from `@hakver/shared/websocket-events.ts`

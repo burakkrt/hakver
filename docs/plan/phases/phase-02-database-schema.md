@@ -68,6 +68,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | providerId | String? | Google OAuth ID |
 | usernameChangedAt | DateTime? | |
 | emailChangedAt | DateTime? | |
+| sessionVersion | Int | default 0 — incremented by `invalidateOtherSessions(userId)` (password change, password reset, email change). JWT access and refresh tokens carry this value as the `sv` claim; `/auth/refresh` rejects tokens whose embedded `sv` is below the current `User.sessionVersion`. Enables server-side session revocation on security events without introducing a per-token tracking table (Phase 3 Section 11.1) |
 | deletedAt | DateTime? | soft delete |
 
 #### Role
@@ -322,6 +323,7 @@ Junction table storing the last N actors aggregated into a notification. UI show
 | id | UUID | PK |
 | notificationId | FK → Notification | index |
 | actorId | FK → User | |
+| isAnonymousForReference | Boolean | default false — written at insert time. `true` when the actor acted anonymously relative to the notification's reference: for `TOPIC` references (TOPIC_VOTED / TOPIC_COMMENTED), resolved from `Topic.isAnonymous` OR a matching `AnonymousIdentity(userId=actorId, topicId=reference.id)` row; for `COMMENT` references (COMMENT_LIKED / COMMENT_REPLIED), resolved from the triggering comment's `isAnonymous` field. Precomputed so notification listing (Phase 10 Section 5) derives `isAnonymousAggregate` without extra joins |
 | createdAt | DateTime | default now |
 | | | @@unique([notificationId, actorId]) — same actor counted once per notification |
 

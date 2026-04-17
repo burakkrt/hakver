@@ -52,11 +52,13 @@ This schema intentionally excludes firstName and lastName. Full name is never sh
 - createdAt: ISO date string
 - firstName: string (full — e.g.: "Ahmet")
 - lastName: string (first character + "." — e.g.: "Demir" → "D.")
-- Rendered together as "Ahmet D." on the profile page. The backend never returns the untruncated family name on this endpoint.
+- age: number — integer years computed from `dateOfBirth` on the server (`floor((now - dob) / 365.25 days)`). Exposes the account holder's age as a community signal without leaking the exact birth date. The raw `dateOfBirth` itself is still withheld from public responses
+- Rendered together as "Ahmet D., 28" on the profile page. The backend never returns the untruncated family name or the raw birth date on this endpoint.
 
 **UserPrivateResponseSchema** (when viewing own profile — the owner may see their full data):
 - UserPublicResponseSchema fields, but `lastName` is returned in full
 - email, dateOfBirth, gender, emailVerifiedAt, usernameChangedAt, emailChangedAt, hasAcceptedConsent
+- `age` is inherited from the public schema; the owner also receives the raw `dateOfBirth` so the settings form can pre-populate the birth-date field
 
 **UserAdminResponseSchema** (admin-only endpoints — the admin dashboard needs the full legal name for compliance and moderation):
 - UserPrivateResponseSchema fields (target user's full firstName and lastName)
@@ -90,6 +92,17 @@ Under `apps/api/src/common/guards/`:
 - `@RequireVerified()` — Email verification required
 - `@CurrentUser()` — User object from request
 
+### 2.1. Profile Completion Guard
+
+**`profile-complete.guard.ts`** — Checks that the user's profile is complete before allowing write actions. Required fields: `username`, `firstName`, `lastName`.
+
+- Applied to all endpoints that create or modify content (topic create, comment create, vote create)
+- Returns 403 with `{ code: "USER_PROFILE_INCOMPLETE", message: "Devam etmek için profilinizi tamamlayın", requiredFields: ["username", "firstName", "lastName"] }` if any required field is null/empty
+- Works alongside existing guards: JWT → Verified → ProfileComplete → Restriction → Permission
+- Decorator: `@RequireCompleteProfile()` — applied on write endpoints
+
+This is critical for OAuth users who may register with incomplete data (Google OAuth provides email but username is set later via profile completion).
+
 ### 2.2. `@SelfOnly` Decorator
 
 Endpoints whose response is tied to the authenticated user (e.g., `GET /users/:username/votes`) must reject requests where the URL parameter does not match the caller. Hand-rolled inline checks drift over time; a single decorator is the authoritative implementation.
@@ -102,17 +115,6 @@ Endpoints whose response is tied to the authenticated user (e.g., `GET /users/:u
 Apply to:
 - `GET /users/:username/votes` — initial self-only endpoint in this phase
 - Any future endpoint whose response body reflects the authenticated user's private signal surface (own activity feeds, private bookmark variants, etc.)
-
-### 2.1. Profile Completion Guard
-
-**`profile-complete.guard.ts`** — Checks that the user's profile is complete before allowing write actions. Required fields: `username`, `firstName`, `lastName`.
-
-- Applied to all endpoints that create or modify content (topic create, comment create, vote create)
-- Returns 403 with `{ code: "USER_PROFILE_INCOMPLETE", message: "Devam etmek için profilinizi tamamlayın", requiredFields: ["username", "firstName", "lastName"] }` if any required field is null/empty
-- Works alongside existing guards: JWT → Verified → ProfileComplete → Restriction → Permission
-- Decorator: `@RequireCompleteProfile()` — applied on write endpoints
-
-This is critical for OAuth users who may register with incomplete data (Google OAuth provides email but username is set later via profile completion).
 
 ### 3. User Module
 
@@ -157,8 +159,9 @@ user/
 **When viewing another user's profile (`GET /users/:username` → UserPublicResponseSchema):**
 - firstName: full (e.g.: "Ahmet") — the first name is not secret; only the family name is abbreviated for identity protection
 - lastName: first character + "." (e.g.: "Demir" → "D.") — rendered together as "Ahmet D."
+- age: integer years (computed server-side from `dateOfBirth`) — shown on the profile as a single number
 - email: not returned
-- dateOfBirth: not returned
+- dateOfBirth: not returned — only the computed `age` is exposed so the exact birth date is never leaked
 - gender: not returned
 
 **When viewing own profile (`GET /users/me` → UserPrivateResponseSchema):**
@@ -205,6 +208,7 @@ Deleted users do NOT receive notifications, do NOT trigger fan-out, and do NOT a
    - `emailVerifiedAt = null` is set (re-verification required)
    - `emailChangedAt = now()`
    - Verification code is sent to the new email
+   - Call `invalidateOtherSessions(userId, { reason: "email-change" })` (Phase 3 Section 11.1) so any other device holding a session tied to the previous email is forced back to login on its next refresh. The current request's response carries the rotated access token and refresh cookie from the helper, so the caller stays logged in seamlessly
 5. If no → 400 error
 
 ### 8. Password Change
@@ -212,6 +216,7 @@ Deleted users do NOT receive notifications, do NOT trigger fan-out, and do NOT a
 1. `currentPassword` is verified with bcrypt
 2. `newPassword` is hashed and updated
 3. OAuth users (passwordHash null) cannot change password → 400 error
+4. Call `invalidateOtherSessions(userId, { reason: "password-change" })` (Phase 3 Section 11.1) — increments `User.sessionVersion` so every other active session is cut at its next refresh. The caller receives a freshly rotated token pair in the same response and remains signed in on the current device
 
 ### 9. Avatar Change and Rank-Locked Avatar Gate
 

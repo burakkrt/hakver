@@ -42,7 +42,7 @@ Add the following shadcn/ui components:
 
 **`tailwind.config.ts`** extensions:
 - Custom colors: primary, secondary, accent (brand colors)
-- Font: Inter or a sans-serif font suitable for the project (Google Fonts)
+- Font: **Nunito** (Google Fonts) — rounded, friendly, readable; matches the "Social, warm, friendly" direction in `.claude/rules/design-system.md` Typography. Authority for the font family is the design-system rule; this phase consumes it
 - Container: centered container with responsive breakpoints
 - Animations: fade-in, slide-in (for transitions)
 
@@ -53,7 +53,7 @@ Add the following shadcn/ui components:
 - CSS custom properties (color theme)
 - Default typography
 
-**Font loading:** Define with `next/font/google` using Inter or the chosen font in `layout.tsx`.
+**Font loading:** Define with `next/font/google` using **Nunito** in `layout.tsx`. Weight subset: `400` (body), `600` (button), `700` (heading) — mirrors the weight guidance in `.claude/rules/design-system.md` Typography. Apply via `--font-nunito` CSS variable so Tailwind's `font-sans` resolves to Nunito app-wide.
 
 ### 4. Layout Components
 
@@ -85,6 +85,7 @@ Add the following shadcn/ui components:
 - Response interceptor:
   - `401 AUTH_TOKEN_EXPIRED` → call `POST /auth/refresh` (cookie is sent automatically); on success, store the new access token in memory and retry the original request once
   - Refresh itself returns `401` → `clearAuth()`, redirect to `/login` (the refresh cookie has already been invalidated by the backend; no client-side cookie clear needed)
+- **Refresh coalescing (authoritative):** the client holds a module-scoped `inFlightRefresh: Promise<string> | null`. When `null`, a `401` hit starts a single `POST /auth/refresh`, assigns the promise, and retries the original request once the promise resolves. Any other request that hits `401` while the promise is live **awaits the same promise** instead of issuing its own refresh. The promise is cleared in both the success and failure branches. This prevents multi-tab / parallel-request races where two simultaneous refresh calls would rotate the refresh cookie twice and invalidate each other's session. Aligns with Phase 3 Section 3's refresh-flow description
 - Error format standardization around the shared `ApiErrorResponse` shape
 - **Important:** never read or write the refresh token from JavaScript — it lives exclusively in the `httpOnly; Secure; SameSite=Strict` cookie set by the backend (see Phase 3 Section 3). The auth store keeps only the access token and the user snapshot
 

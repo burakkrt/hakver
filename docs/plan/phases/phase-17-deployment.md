@@ -203,6 +203,8 @@ The following scheduled jobs run in the backend (`@nestjs/schedule`):
 
 These are configured in a `ScheduleModule` within the backend. Ensure Railway keeps at least one instance running for cron jobs to execute.
 
+**Batched delete pattern (authoritative for every retention/archival job):** all rows-removing cron jobs above — Activity Log Cleanup, Notification Cleanup, Expired Restriction Cleanup, and XpLog Hot/Cold Archival — delete or move rows in chunks of 5000 inside short transactions, looping until a pass affects zero rows. The chunked shape matches the XpLog archival job and prevents long-lived locks from starving the app's hot-path queries. Authoritative descriptions live in Phase 10 Section 9.1 (activity log / notification) and Phase 2 / Phase 10 Section 9.2 (XpLog archival); Phase 17 cron wiring consumes those contracts without re-defining them.
+
 ### 8. Production Smoke Test
 
 Post-deployment manual checklist:
