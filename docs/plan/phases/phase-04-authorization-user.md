@@ -39,7 +39,7 @@
 - id: UUID
 - username: string
 - avatar: `{ url: string }`
-- rank: `{ name: string }` — the rank display name (e.g., "Jüri Üyesi")
+- rank: `{ name: string, iconSlug: string, color: string }` — rank metadata consumed by the frontend `<RankBadge />` component (Phase 11 Section 11) to render an icon + color-tinted pill. Example: `{ "name": "Yargıç", "iconSlug": "gavel", "color": "indigo" }`
 - totalXp: number
 - isDeletedAuthor: boolean — `true` when the referenced user is soft-deleted; frontend uses this to render an "Silinmiş Kullanıcı" styled anonymous card instead of the real username/avatar
 
@@ -165,7 +165,7 @@ user/
 - All fields are returned in full, including the owner's full surname
 
 **When representing a user alongside content (topic cards, comment cards, notification actors — UserPublicCardSchema):**
-- id, username, avatar (url), rank (name), totalXp, isDeletedAuthor only
+- id, username, avatar (url), rank (name, iconSlug, color), totalXp, isDeletedAuthor only
 - firstName and lastName are NOT returned on card responses. Any list, feed, or WebSocket event that includes a user reference must use the card schema, not the profile schema
 - This is a security-critical rule: the family name must not leak into feeds, notifications, search results, or any non-profile response
 
@@ -181,7 +181,7 @@ Every endpoint that returns a `UserPublicCardSchema` populates `isDeletedAuthor`
 - Active user → `isDeletedAuthor: false`, real username / avatar / rank / totalXp shown
 - Soft-deleted user → `isDeletedAuthor: true`. The backend still returns a schema-compliant card, but substitutes the display fields so no leaked username or avatar appears:
   - `username` → `"Silinmiş Kullanıcı"` (constant label; the raw `deleted_{uuid}` username is never returned to clients)
-  - `avatar.url` → the default "silinmis" avatar (maintained in the Avatar seed list)
+  - `avatar.url` → the system "Silinmiş Kullanıcı" placeholder avatar (`category: "system"`, maintained in the Avatar seed list and never selectable by users)
   - `rank.name` → `null`-replaced with an empty string, or the card simply omits the rank badge — frontend hides rank when `isDeletedAuthor` is `true`
   - `totalXp` → `0` (deleted accounts do not expose XP)
 
@@ -213,11 +213,53 @@ Deleted users do NOT receive notifications, do NOT trigger fan-out, and do NOT a
 2. `newPassword` is hashed and updated
 3. OAuth users (passwordHash null) cannot change password → 400 error
 
-### 9. Avatar Change
+### 9. Avatar Change and Rank-Locked Avatar Gate
+
+`PATCH /users/me/avatar`:
 
 1. Request: `{ avatarId: UUID }`
-2. Check that the avatar has `isActive: true`
-3. Update the user's `avatarId` field
+2. Load the target avatar. Reject when any of the following fails:
+   - `isActive === true`
+   - `category !== 'system'` (system-category avatars are never selectable by users) — 403 `{ code: "AVATAR_LOCKED", message: "Bu avatar seçilemez" }`
+3. If `requiredRankId` is null (free pool) → proceed to step 5
+4. If `requiredRankId` is populated:
+   - Load the referenced `Rank`
+   - Compute `gateValue = max(user.totalXp, user.highestXpReached)` — uses the monotonic watermark (Phase 2 `User.highestXpReached` field) so an admin SUBTRACT/SET or reconciliation drift never re-locks a previously earned avatar
+   - If `gateValue < rank.minXp` → 403 `{ code: "AVATAR_LOCKED", message: "Bu avatar [Rank.name] rütbesine ulaşınca seçilebilir" }`
+5. Update `user.avatarId`
+6. Response: updated private profile response
+
+### 9.1. `GET /avatars` Response Shape
+
+The endpoint returns every avatar where `category IN ('free', 'rank-locked')` and `isActive = true`. System-category avatars are filtered out. Each row is hydrated with a per-viewer lock flag:
+
+```json
+{
+  "data": [
+    {
+      "id": "...",
+      "name": "Anonim Penguen",
+      "url": "/avatars/anonim-penguen.svg",
+      "category": "free",
+      "isLocked": false,
+      "requiredRank": null
+    },
+    {
+      "id": "...",
+      "name": "Yargıç Baykuşu",
+      "url": "/avatars/yargic-baykusu.svg",
+      "category": "rank-locked",
+      "isLocked": true,
+      "requiredRank": { "name": "Yargıç", "minXp": 1500, "iconSlug": "gavel", "color": "indigo" }
+    }
+  ]
+}
+```
+
+- `isLocked` is computed per request from the viewer's `max(totalXp, highestXpReached)`. Unauthenticated callers receive `isLocked: true` for every `rank-locked` row so anonymous grid previews remain truthful
+- The catalogue is bounded at 39 rows (15 free + 24 rank-locked), fits in a single payload — no pagination
+- Cache key: `@CacheTTL(3600)` scoped by viewer tier, e.g., `avatars:v1:{rankId}` or `avatars:v1:anonymous`. Admin avatar or rank edits invalidate every scope via tag-based or prefix-based invalidation
+- The frontend consumes this response to render the avatar grid in profile settings (Phase 12 Section 10)
 
 ### 10. Account Deletion (KVKK Anonymization + Cold Archive)
 
@@ -307,6 +349,9 @@ This cold-archive pipeline is **not part of MVP scope** — Stage 1 alone is suf
 - [ ] Password hash is never returned in any response
 - [ ] Users with `deletedAt` cannot log in
 - [ ] Username check endpoint is rate limited
+- [ ] `PATCH /users/me/avatar` rejects rank-locked avatars whose `requiredRank.minXp` exceeds `max(user.totalXp, user.highestXpReached)` with 403 `AVATAR_LOCKED`
+- [ ] `category: "system"` avatars cannot be selected via `PATCH /users/me/avatar` under any circumstance
+- [ ] `GET /avatars` filters out `category: "system"` rows and hydrates `isLocked` using the viewer's monotonic XP watermark
 
 ## Test Plan
 
@@ -321,7 +366,7 @@ GET /api/v1/users/me → 200, all fields (private), full lastName
 GET /api/v1/users/testuser → 200, firstName full + lastName initial (e.g. "Ahmet D."), no email/dateOfBirth/gender
 GET /api/v1/users/nonexistent → 404
 # Card shape: any list endpoint's author object has no firstName/lastName keys
-GET /api/v1/topics → each topic.author contains { id, username, avatar: { url }, rank: { name }, totalXp, isDeletedAuthor } only
+GET /api/v1/topics → each topic.author contains { id, username, avatar: { url }, rank: { name, iconSlug, color }, totalXp, isDeletedAuthor } only
 
 # 2. Profile update
 PATCH /api/v1/users/me { bio: "test" } → 200
@@ -341,8 +386,12 @@ DELETE /api/v1/users/me → 200
 GET /api/v1/users/me (with deleted account token) → 401
 
 # 6. Avatar
-GET /api/v1/avatars → 200, avatar list
-PATCH /api/v1/users/me/avatar { avatarId: "..." } → 200
+GET /api/v1/avatars → 200, 39 rows (15 free + 24 rank-locked); system avatars excluded
+# Each row carries isLocked flag; unauthenticated viewer sees every rank-locked row as isLocked: true
+PATCH /api/v1/users/me/avatar { avatarId: "<free-avatar>" } → 200
+PATCH /api/v1/users/me/avatar { avatarId: "<locked-above-current-rank>" } → 403 AVATAR_LOCKED
+PATCH /api/v1/users/me/avatar { avatarId: "<system-avatar-id>" } → 403 AVATAR_LOCKED
+# After user.highestXpReached crosses the avatar's rank threshold once, subsequent reselection succeeds even if totalXp has been reduced
 
 # 7. Username availability
 GET /api/v1/users/check-username/test → { available: true/false }
@@ -357,6 +406,7 @@ GET /api/v1/users/check-username/test → { available: true/false }
 - [ ] UserPublicCardSchema, UserPublicResponseSchema, UserPrivateResponseSchema, and UserAdminResponseSchema are all defined in `@hakver/shared` and used by the right endpoints
 - [ ] Username and email change limits work
 - [ ] Password change works
-- [ ] Avatar selection works
+- [ ] Avatar selection works, including rank-lock gate (AVATAR_LOCKED for premature selection, system avatar always rejected, `highestXpReached` preserves access after XP reductions)
+- [ ] `GET /avatars` returns `isLocked` and `requiredRank` per row and filters out system avatars
 - [ ] Account deletion with anonymization works
 - [ ] All tests pass

@@ -170,6 +170,24 @@ jobs:
   # This CI only runs test and lint checks
 ```
 
+### 7.2. Avatar Asset Generation (Build-Time)
+
+The 39 avatar SVGs (15 free + 24 rank-locked) are self-hosted under `apps/web/public/avatars/` — no runtime dependency on `api.dicebear.com`, so the Phase 16 CSP (`img-src 'self' res.cloudinary.com data:`) stays intact. The single system-category avatar (`silinmis.svg`) ships alongside the public catalog but is served only when the backend hydrates a deleted-author card.
+
+**Generation script — `scripts/generate-avatars.ts`** (repo root):
+- Uses `@dicebear/core` + `@dicebear/collection` npm packages installed as **dev dependencies** (never shipped in the production bundle)
+- Reads the avatar catalog from `scripts/avatar-manifest.ts`, which lists every avatar (40 entries: 15 free + 24 rank-locked + 1 system) with its Turkish `name`, target `slug`, DiceBear `style` (e.g., `avataaars`, `bottts`, `lorelei`), and deterministic `seed` so output is stable across runs
+- Writes `apps/web/public/avatars/{slug}.svg` for each entry
+- Also writes `apps/web/public/avatars/index.json` — the same manifest consumed by the Phase 2 database seed script, keeping filesystem + database catalogs perfectly synchronized
+
+**Build integration:**
+- `package.json` root adds the script: `"generate:avatars": "tsx scripts/generate-avatars.ts"`
+- Generated SVGs are committed to git — fresh deploy environments do not need to run the generator
+- Vercel + GitHub Actions build steps do **not** rerun `pnpm generate:avatars`; it is an authoring helper executed on the developer's machine whenever the manifest changes
+- The database seed (Phase 2 Section 6) reads `scripts/avatar-manifest.ts` to insert Avatar rows with matching `name`, `url = "/avatars/{slug}.svg"`, `category`, `requiredRankId`, and `sortOrder` — a single source of truth prevents drift between the filesystem and `Avatar` rows
+
+**Post-MVP upgrade path:** when bespoke illustrations replace DiceBear output, the manifest stays unchanged; only the SVG files under `public/avatars/` are swapped. The Avatar rows in the database continue to reference the same slugs, so no migration is required.
+
 ### 7.1. Cron Jobs (Production)
 
 The following scheduled jobs run in the backend (`@nestjs/schedule`):
@@ -335,3 +353,5 @@ GitHub repository settings:
 - [ ] Swagger disabled in production
 - [ ] Cron jobs running (activity log + notification cleanup)
 - [ ] Data retention policy enforced
+- [ ] 39 avatar SVGs (15 free + 24 rank-locked) and 1 system avatar exist under `apps/web/public/avatars/`; `index.json` matches `scripts/avatar-manifest.ts`
+- [ ] Database Avatar rows reference `/avatars/{slug}.svg` URLs and every URL resolves to a committed SVG file

@@ -67,9 +67,11 @@ Runs inside `withUserXpLock(userId, ...)`:
    - Distinct non-whitespace ratio ≥ 25% of trimmed non-whitespace length — lenient enough to keep repeated emphasis patterns like "tamamm tamamm" (distinct `{t,a,m, }`; non-whitespace length 12, distinct non-whitespace count 3 → 25%) valid, while still rejecting `"hahahahahaha"` (2 distinct out of 12 → 16%). Whitespace is excluded from both numerator and denominator so sentence-level spacing does not skew the ratio
    
    The ratio was lowered from an earlier 30% draft after reviewing Turkish phrasing patterns — short genuine replies with limited alphabet (e.g., emoji clusters, repeated affirmations) were tripping the stricter threshold. 25% preserves spam resistance while respecting natural short Turkish text
-5. Create `XpLog` record (`points: basePoints`)
-6. Update `User.totalXp += basePoints`
-7. **Rank check:** `checkAndUpdateRank(userId)`
+5. Capture `previousHighestXpReached = user.highestXpReached` before mutating the row — used later by the rank-up idempotency check
+6. Create `XpLog` record (`points: basePoints`)
+7. Update `User.totalXp += basePoints`
+8. Update `User.highestXpReached = GREATEST(user.highestXpReached, user.totalXp)` in the same row update — monotonic watermark, never decreases, drives the avatar-lock gate (Phase 4 Section 9) and rank-up idempotency (step 9 and Phase 10)
+9. **Rank check:** `checkAndUpdateRank(userId, { previousHighestXpReached, trigger: "organic" })`
 
 > **Badge system integration is intentionally deferred.** The badge catalog, per-badge XP bonus semantics, and the badge-earn award hook are not part of MVP — see `plan.md` "Detailed Design Pending Items". When the design ships, this flow will be revisited to insert the bonus-application and badge-award steps.
 
@@ -80,12 +82,20 @@ Runs inside `withUserXpLock(userId, ...)`:
 1. Find the related record in the `XpLog` table
 2. If found → create a reverse XP log (negative points)
 3. Update `User.totalXp -= points` (minimum 0)
-4. **Rank check:** `checkAndUpdateRank(userId)`
+4. `User.highestXpReached` is **not** decreased — the watermark is monotonic by contract (Phase 2 User table). Avatars previously earned stay selectable even after revocation
+5. **Rank check:** `checkAndUpdateRank(userId, { previousHighestXpReached: user.highestXpReached, trigger: "organic" })` — because revocation cannot raise the watermark, this call never fires a rank-up notification; it only demotes `currentRankId` if the reduced `totalXp` has fallen under the previous threshold
 
-**`checkAndUpdateRank(userId)`:**
-1. Get the `User.totalXp` value
-2. Find the highest rank from the `Rank` table where `minXp <= totalXp`
-3. If current rank is different → update `User.currentRankId`
+**`checkAndUpdateRank(userId, context)`:**
+
+`context` carries `{ previousHighestXpReached: number, trigger: "organic" | "admin-adjust" | "reconciliation" }`. The function runs inside the caller's `withUserXpLock` transaction.
+
+1. Read the current `User.totalXp` value
+2. Find the highest rank where `minXp <= totalXp` (order by `minXp DESC, sortOrder DESC`). The starter rank (Gözlemci, 0 XP) guarantees a match — `currentRankId` never resolves to null
+3. If the resolved rank differs from `User.currentRankId` → update `User.currentRankId`
+4. **Rank-up detection (idempotent, YS2):** if `newRank.minXp > context.previousHighestXpReached` → this is a first-time summit. Emit a rank-up event with `{ userId, previousRankId, newRankId, trigger: context.trigger }`. The event is handled by:
+   - Phase 10 `NotificationService.createNotification(type=RANK_UP, ...)` — creates the persistent `RANK_UP` notification (self-notification prevention is bypassed for this type)
+   - Phase 10 `ActivityLogService.log(action="user:rank-up", metadata={ previousRankId, newRankId, trigger })` — audit entry retained 90 days (regular category)
+5. If the rank changed but `newRank.minXp <= context.previousHighestXpReached` (drift, reconciliation correction, re-earn after admin SUBTRACT) → the rank change is a silent bookkeeping update; no notification, no activity log entry
 
 ### 3. Integration with Existing Modules
 
@@ -133,9 +143,9 @@ Rank and XP are part of the `UserPublicCardSchema` defined in Phase 4. Every end
 {
   "id": "...",
   "username": "...",
-  "avatar": { "url": "..." },
-  "rank": { "name": "Jüri Adayı" },
-  "totalXp": 750,
+  "avatar": { "url": "/avatars/anonim-penguen.svg" },
+  "rank": { "name": "Yargıç", "iconSlug": "gavel", "color": "indigo" },
+  "totalXp": 1750,
   "isDeletedAuthor": false
 }
 ```
@@ -182,13 +192,15 @@ Request body:
 Flow:
 1. Validate request (points > 0, reason required, max 500 chars)
 2. Check target user exists and is not deleted
-3. Inside a Prisma `$transaction` with `SELECT ... FOR UPDATE` on User row:
+3. Inside a Prisma `$transaction` with `SELECT ... FOR UPDATE` on User row (reuses `withUserXpLock`):
+   - Capture `previousHighestXpReached = user.highestXpReached` before mutations
    - **ADD:** Create XpLog with `action=ADMIN_ADJUST`, `referenceType=USER`, `referenceId=targetUserId`, `points=+requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "ADD" }`
    - **SUBTRACT:** Create XpLog with `action=ADMIN_ADJUST`, `referenceType=USER`, `referenceId=targetUserId`, `points=-requestedPoints`, `metadata={ reason, adjustedBy: adminUserId, type: "SUBTRACT" }`. Ensure `User.totalXp` does not go below 0.
    - **SET:** Calculate difference (`requestedPoints - currentTotalXp`), create XpLog with `referenceType=USER`, `referenceId=targetUserId`, the difference as points, `metadata={ reason, adjustedBy: adminUserId, type: "SET", previousXp: currentTotalXp }`
 4. Update `User.totalXp` accordingly
-5. Run `checkAndUpdateRank(userId)` — rank may change after XP adjustment
-6. Log the action in ActivityLog (security/moderation category — 1 year retention)
+5. Update `User.highestXpReached = GREATEST(user.highestXpReached, user.totalXp)` — ADD or SET-up may raise the watermark, SUBTRACT and SET-down leave it untouched (monotonic invariant preserved)
+6. Run `checkAndUpdateRank(userId, { previousHighestXpReached, trigger: "admin-adjust" })` — rank may change after XP adjustment. A first-time summit fires `RANK_UP` notification and `user:rank-up` ActivityLog with `trigger: "admin-adjust"`; a round-trip back to a previously held rank is silent (idempotency gate)
+7. Log the action in ActivityLog (security/moderation category — 1 year retention)
 
 **Security:**
 - Daily XP limit (1000) does NOT apply to admin adjustments
@@ -212,6 +224,9 @@ Flow:
 - [ ] Admin XP adjustments are exempt from daily limit but fully logged (ActivityLog + XpLog)
 - [ ] Admin XP adjustment requires mandatory reason field for audit trail
 - [ ] XP reconciliation cron job detects and corrects totalXp drift
+- [ ] `User.highestXpReached` is monotonically non-decreasing; revocation, SUBTRACT, SET-down, and reconciliation corrections never write a lower value
+- [ ] `RANK_UP` notification fires only when the new rank's `minXp` exceeds `previousHighestXpReached` (first-time summit); round-trips through a previously held rank are silent
+- [ ] `checkAndUpdateRank` accepts a trigger context (`organic`, `admin-adjust`, `reconciliation`) used by ActivityLog `user:rank-up` entries
 
 ## Test Plan
 
@@ -253,13 +268,15 @@ POST /comments/:id/like → like
 # Perform actions until reaching 1000 XP
 # Next action should not award XP
 
-# 8. Rank assignment (10-tier Justice theme, see Phase 2 seed)
-# totalXp 0 → rank "Yeni Vatandaş"
-# totalXp 100+ → rank "Gözlemci"
-# totalXp 300+ → rank "Tanık"
-# totalXp 1750+ → rank "Jüri Üyesi"
-# totalXp 8500+ → rank "Hakem"
-# totalXp 70000+ → rank "Adalet Bilgesi"
+# 8. Rank assignment (8-tier Wisdom / Justice theme, see Phase 2 seed)
+# totalXp 0 → rank "Gözlemci"
+# totalXp 150+ → rank "Düşünür"
+# totalXp 500+ → rank "Hakem"
+# totalXp 1500+ → rank "Yargıç"
+# totalXp 5000+ → rank "Bilge"
+# totalXp 15000+ → rank "Adalet Üstadı"
+# totalXp 30000+ → rank "Bilgelik Piri"
+# totalXp 60000+ → rank "Allâme"
 
 # 9. Is rank visible in responses?
 GET /users/:username → is rank info present?
@@ -278,6 +295,13 @@ PATCH /admin/users/:id/xp { points: 100 } (no reason) → 400
 # 11. Race condition test
 # Two concurrent awardXp calls for the same user → totalXp correct? (no daily limit bypass?)
 # Concurrent awardXp + revokeXp → totalXp consistent?
+# highestXpReached invariant: after 1000 awardXp + 1000 revokeXp interleaved → highestXpReached == peak totalXp, never below
+
+# 11.1. Rank-up idempotency (YS2)
+# Grant XP to cross into "Yargıç" → RANK_UP notification + user:rank-up ActivityLog entry emitted
+# Admin SET totalXp to 0 → currentRankId drops to "Gözlemci"; highestXpReached remains at the peak
+# Award XP again to cross back into "Yargıç" → currentRankId updates but NO duplicate RANK_UP notification
+# Award XP past "Yargıç" into "Bilge" (first time) → new RANK_UP notification fires (new summit)
 
 # 12. Metadata checks
 # Comment XP → does XpLog contain metadata.topicId?
@@ -309,4 +333,7 @@ DELETE /comments/:id/like → is COMMENT_LIKE_RECEIVED XP revoked?
 - [ ] Admin XP adjustment (ADD/SUBTRACT/SET) works
 - [ ] Admin XP adjustment is logged and auditable
 - [ ] XP reconciliation cron job is configured
+- [ ] `checkAndUpdateRank` emits `RANK_UP` notification and `user:rank-up` ActivityLog entry on first-time rank summits
+- [ ] `User.highestXpReached` watermark is written by `awardXp`, admin adjustments, and reconciliation flows; never decreased
+- [ ] Admin XP adjustment rank-up events carry `trigger: "admin-adjust"` metadata
 - [ ] All tests pass

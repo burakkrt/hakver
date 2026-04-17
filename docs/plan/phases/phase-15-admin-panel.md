@@ -180,12 +180,19 @@ AdminStatsResponseSchema = {
 - **Data-access audit:** Every time an admin view of this endpoint is served (i.e., full firstName + lastName returned), the backend writes an `ActivityLog` entry with `action: "admin:user-view"`, `metadata: { viewedUserId, viewerId }`. Moderator views are not audited at this level (they do not receive the full legal name). This is a KVKK/veri-koruma denetim izi for legal-name access
 - Role badges
 - **XP Management section (Admin only):**
-  - Current XP and rank display
+  - Current XP and rank display — shows both `totalXp` and `highestXpReached` side by side (e.g., `"Şu anki XP: 3.200 · Zirve XP: 5.100"`) so admins can reason about why a rank-gated avatar remains selectable after a SUBTRACT or SET-down
   - XP adjustment form: type selector (Ekle / Çıkar / Ayarla), points input, reason textarea (mandatory)
   - "Ekle" adds points, "Çıkar" subtracts, "Ayarla" sets to exact value
   - Recent XP log table (last 20 entries — action, points, date, metadata)
   - Success toast with new XP value and rank after adjustment
   - Calls `PATCH /admin/users/:id/xp` (Phase 8 Task 5.1)
+  - **Idempotency note surfaced to the admin:** the inline helper text reads `"XP azaltmak kullanıcının önceden açtığı rozet ve avatarları geri kilitlemez. XP tekrar artırılırsa aynı rütbeye yeniden ulaşıldığında bildirim gönderilmez."`
+- **Rank History section (Admin only):**
+  - Populated from `ActivityLog` rows where `action === 'user:rank-up'` (Phase 10 Section 9)
+  - Each row: `<RankBadge size="sm" />` with the rank name, achieved timestamp (absolute + relative), and a trigger tag: `"organik"` (user earned it), `"yönetici"` (admin XP adjustment), `"mutabakat"` (reconciliation drift correction). The mapping consumes the `metadata.trigger` field
+  - Paginated (last 20 entries with load-more)
+  - Empty state: `"Kullanıcı henüz bir rütbeye yükselmedi"` for brand-new Gözlemci accounts with no summit entries
+  - History reflects first-time summits only — passive re-entries into previously held ranks are deliberately hidden (Phase 10 idempotency rule)
 - Active restrictions list
 - Recent activity log (last 20 entries for this user)
 - Recent reports against this user

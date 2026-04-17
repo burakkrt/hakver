@@ -54,6 +54,17 @@ Playwright test files under `apps/web/e2e/`.
 - Change avatar → avatar updated
 - Other user's profile → firstName shown in full, lastName rendered as a single initial plus "." (e.g., "Ahmet D.")
 - Cards (topic list, comment list, notification drawer) display only the username for the author — no firstName or lastName appears next to content
+- Profile header renders `<RankProgress />` with the correct remaining-XP copy for the next rank; summit holders see the `"Zirve rütbeye ulaştınız"` collapsed state
+
+#### Rank & Avatar flow (`rank-avatar.spec.ts`)
+- New registration → `currentRankId` resolves to Gözlemci, a free-pool avatar is assigned, `highestXpReached` starts at 0
+- Earn XP to cross the Düşünür threshold (150 XP) → `notification:new` with `RANK_UP` arrives, toast + `<RankUpModal />` display once, persistent notification visible in `/notifications`
+- Profile settings avatar grid: newly unlocked Düşünür avatars become selectable; attempting to select a Yargıç-locked avatar returns `AVATAR_LOCKED` and the error toast fires with no persisted change
+- Hover-reveal on a locked avatar removes the overlay; moving off restores it; keyboard focus triggers the same reveal
+- Admin flow: admin SETs the account's XP to 0 → `totalXp` drops, `highestXpReached` persists, the previously chosen Düşünür avatar remains on the profile card and remains re-selectable from the grid
+- Admin SETs the XP back to 5000 (crossing Bilge for the second time on the account) → `currentRankId` updates, but NO duplicate `RANK_UP` notification is emitted (YS2 idempotency)
+- Offline rank-up: disconnect the socket, then trigger an admin adjustment that crosses a new summit. On the next authenticated page load the catch-up modal fires exactly once
+- `<RankUpModal />` does not re-fire after a page refresh on the same rank id (the notification's `isRead` state + celebration store guard)
 
 #### Notification flow (`notification.spec.ts`)
 - Vote received → notification badge increases
@@ -112,6 +123,9 @@ Check and fix for each item:
 - [ ] Profile endpoints for other users return an abbreviated surname
 - [ ] Deleted users cannot log in
 - [ ] Normal users cannot access admin endpoints
+- [ ] `PATCH /users/me/avatar` rejects rank-locked avatars whose `requiredRank.minXp` exceeds `max(user.totalXp, user.highestXpReached)` with `AVATAR_LOCKED`
+- [ ] Direct id probing on a `category: "system"` avatar returns `AVATAR_LOCKED` regardless of the caller's rank
+- [ ] `GET /avatars` omits `category: "system"` rows from both authenticated and anonymous responses
 
 **A02: Cryptographic Failures**
 - [ ] Passwords hashed with bcrypt
@@ -128,6 +142,8 @@ Check and fix for each item:
 - [ ] Rate limiting on all sensitive endpoints
 - [ ] Email verification brute-force protection (5 attempt limit)
 - [ ] Restriction system cannot be applied to admins/moderators
+- [ ] `User.highestXpReached` is monotonically non-decreasing — no endpoint (including admin XP SUBTRACT/SET-down) can write a lower value
+- [ ] `RANK_UP` notification cannot be induced twice for the same rank via admin XP round-trips (idempotency gate verified)
 
 **A05: Security Misconfiguration**
 - [ ] CORS allows only the declared allowed origins (main web app + admin panel + any other configured origin) — no wildcard

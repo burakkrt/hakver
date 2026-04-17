@@ -39,8 +39,8 @@ AuthProvider: LOCAL, GOOGLE
 VoteType: RIGHT, WRONG
 ReportTargetType: TOPIC, COMMENT, USER
 ReportStatus: PENDING, REVIEWED, RESOLVED, DISMISSED
-NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED, COMMENT_HIGHLIGHTED, ADMIN_BROADCAST
-ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER
+NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED, COMMENT_HIGHLIGHTED, ADMIN_BROADCAST, RANK_UP
+ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER, RANK
 ```
 
 ### 3. Table Schemas
@@ -62,6 +62,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | bio | String? | max 500 characters |
 | avatarId | FK → Avatar | |
 | totalXp | Int | default 0 |
+| highestXpReached | Int | default 0 — monotonically increasing watermark of the highest `totalXp` the user has ever held. Updated in the same transaction as `totalXp` via `GREATEST(highestXpReached, totalXp)`. Never decreased — persists across XP revocation, admin SUBTRACT/SET, and reconciliation drift correction. Drives rank-gated avatar unlocks (Phase 4 Section 9) and `RANK_UP` notification idempotency (Phase 10) |
 | currentRankId | FK → Rank? | |
 | provider | AuthProvider enum | default LOCAL |
 | providerId | String? | Google OAuth ID |
@@ -102,10 +103,16 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | Field | Type | Constraint |
 |-------|------|-----------|
 | id | UUID | PK |
-| name | String | |
-| url | String | |
-| isDefault | Boolean | default false |
+| name | String | Turkish display name (e.g., "Anonim Penguen", "Yargıç Baykuşu") |
+| url | String | Served from `/avatars/{slug}.svg` (self-hosted; see Phase 17 build step) |
+| category | String enum | `"free"` · `"rank-locked"` · `"system"` — controls visibility and selection eligibility |
+| requiredRankId | FK → Rank? | null for `category="free"` or `"system"`; populated for `category="rank-locked"`. Viewer must satisfy `max(totalXp, highestXpReached) >= rank.minXp` to select |
+| sortOrder | Int | default 0 — grid ordering within a category |
 | isActive | Boolean | default true |
+
+**Notes:**
+- The old `isDefault` field is removed. Initial-pool candidate selection for new registrations uses `WHERE category = 'free' AND isActive = true ORDER BY RANDOM() LIMIT 1` (Phase 3 Section 5 step 6).
+- `category: "system"` rows are excluded from the public `GET /avatars` response and can never be selected via `PATCH /users/me/avatar` — they are only ever assigned by backend services (e.g., the "Silinmiş Kullanıcı" placeholder referenced in Phase 4 Section 5.1).
 
 #### Category
 | Field | Type | Constraint |
@@ -232,8 +239,10 @@ Key consequences for downstream queries:
 | Field | Type | Constraint |
 |-------|------|-----------|
 | id | UUID | PK |
-| name | String | |
-| minXp | Int | unique |
+| name | String | Turkish display name (e.g., "Yargıç", "Allâme") |
+| minXp | Int | unique — non-negative; `0` for the starter rank |
+| iconSlug | String | Lucide icon identifier rendered by the frontend `<RankBadge />` component (see Phase 11 Section 11). Example values seeded below |
+| color | String | Semantic color token that drives the rank badge tint (e.g., `"zinc"`, `"violet"`, `"amber"`). Frontend maps the token to Tailwind classes |
 | sortOrder | Int | |
 
 #### RestrictionCategory
@@ -407,6 +416,7 @@ Additional indexes for performance:
 - `UserNotificationPreference`: `(userId, type)` — unique, preference lookup
 - `UserRestriction`: `(userId, expiresAt)` — active restriction check
 - `UserBlock`: `(blockedId)` — reverse block lookup for symmetric block checks
+- `Avatar`: `(category, requiredRankId, sortOrder)` — avatar grid listing and rank-filter query
 
 ### 4.1. Search Index (pg_trgm)
 
@@ -445,8 +455,30 @@ Under `apps/api/src/prisma/`:
 - Genel (slug: genel)
 - İlişkiler (slug: iliskiler)
 
-**Avatars:**
-- 6-8 default avatars (placeholder URLs, real images to be added later). One with `isDefault: true`.
+> **Seed order note:** `Rank` rows are seeded **before** `Avatar` rows because `Avatar.requiredRankId` is an FK to `Rank.id`. The seed script enforces this ordering; any reshuffling will fail the FK check.
+
+**Ranks (8 tiers, Wisdom / Justice theme — Turkish display names):**
+
+| name            | minXp  | iconSlug    | color   | sortOrder |
+|-----------------|--------|-------------|---------|-----------|
+| Gözlemci        | 0      | eye         | zinc    | 1         |
+| Düşünür         | 150    | lightbulb   | violet  | 2         |
+| Hakem           | 500    | scale       | blue    | 3         |
+| Yargıç          | 1500   | gavel       | indigo  | 4         |
+| Bilge           | 5000   | book-open   | emerald | 5         |
+| Adalet Üstadı   | 15000  | landmark    | amber   | 6         |
+| Bilgelik Piri   | 30000  | sparkles    | rose    | 7         |
+| Allâme          | 60000  | crown       | gold    | 8         |
+
+Progression: middle tiers step by ~3x (500→1500→5000→15000), the top two tiers step by 2x (30000→60000) so the summit stays reachable for dedicated users without collapsing the prestige gap. The starter rank (Gözlemci, 0 XP) is assigned automatically at registration (Phase 3 Section 5 step 8) and preserves the non-null `User.currentRankId` invariant.
+
+**Avatars (40 rows total — 15 free + 24 rank-locked + 1 system):**
+
+- **Free pool (15 rows, `category: "free"`, `requiredRankId: null`, `isActive: true`):** community-friendly illustrations used as the initial-pool candidates for new registrations. Turkish display names (e.g., "Anonim Penguen", "Sakin Tilki", "Meraklı Baykuş"). Registration draws one at random via `WHERE category = 'free' AND isActive = true ORDER BY RANDOM() LIMIT 1` (Phase 3 Section 5 step 6). All 15 rows are interchangeable; there is no single "default" row.
+- **Rank-locked (24 rows, `category: "rank-locked"`):** 3 avatars per rank (8 × 3 = 24), each with `requiredRankId` pointing to the relevant `Rank.id`. Themed to the rank identity — e.g., Gözlemci avatars evoke observer/binocular motifs, Yargıç avatars evoke gavel/scale/owl motifs, Allâme avatars evoke crown/star/manuscript motifs. The UI surfaces them as locked until the viewer's `max(totalXp, highestXpReached)` reaches `requiredRank.minXp`.
+- **System (1 row, `category: "system"`, `isActive: true`, `requiredRankId: null`):** the "Silinmiş Kullanıcı" placeholder referenced by Phase 4 Section 5.1. Hidden from `GET /avatars` and never selectable via `PATCH /users/me/avatar`; only assigned internally by services that hydrate deleted-author cards.
+
+All 40 rows use `url = "/avatars/{slug}.svg"`. The SVG assets are generated via DiceBear at build time and committed to `apps/web/public/avatars/` — see Phase 17 Section 7.2 for the `pnpm generate:avatars` build step. No external CDN dependency; Phase 16 CSP remains unchanged.
 
 **XP Actions:**
 - TOPIC_CREATE: 50 points
@@ -455,20 +487,6 @@ Under `apps/api/src/prisma/`:
 - COMMENT_LIKE_RECEIVED: 2 points
 - TOPIC_VOTE_RECEIVED: 1 point
 - ADMIN_ADJUST: 0 points (actual points are set per request by admin — this action is exempt from daily XP limits)
-
-**Ranks (10 tiers, Justice / Jury theme — Turkish display names):**
-- Yeni Vatandaş: 0 XP
-- Gözlemci: 100 XP
-- Tanık: 300 XP
-- Jüri Adayı: 750 XP
-- Jüri Üyesi: 1750 XP
-- Kıdemli Jüri: 4000 XP
-- Hakem: 8500 XP
-- Bilirkişi: 17500 XP
-- Yargıç: 35000 XP
-- Adalet Bilgesi: 70000 XP
-
-Progression: each tier is roughly 2–2.3x the previous threshold. Early tiers reward quickly to motivate new users; upper tiers act as long-term prestige. The top tier (70k XP) is aimed at the top ~1% of users. The curve is slightly steeper than the original 5x step because the user asked for 10 tiers instead of 6; overall gradient stays close to ~2.2x per tier.
 
 **Restriction Categories and Reasons:**
 - Uygunsuz İçerik → "Hakaret veya küfür içeren paylaşım", "Şiddete teşvik eden içerik", "Cinsel içerikli paylaşım"
@@ -489,6 +507,9 @@ Each should be written in a professional and formal tone (in Turkish). They shou
 - firstName / lastName: `"Yönetici"` / `"Hakver"` placeholder values (admin can edit post-login)
 - role: ADMIN
 - `emailVerifiedAt`: set to `now()` so the admin account can perform write actions without going through the verification flow
+- `currentRankId`: the id of the lowest-threshold rank (Gözlemci, 0 XP) — satisfies the non-null `currentRankId` invariant applied to every account (Phase 3 Section 5 step 8)
+- `highestXpReached`: 0
+- `avatarId`: drawn from the free-pool using the same random-selection rule as new registrations (`WHERE category = 'free' AND isActive = true ORDER BY RANDOM() LIMIT 1`)
 
 The seed script must skip admin creation when a user with the `ADMIN_EMAIL` address already exists (idempotent re-seed). The plaintext `ADMIN_PASSWORD` is never persisted — only the bcrypt hash is written to the database.
 

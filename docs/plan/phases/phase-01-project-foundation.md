@@ -146,7 +146,7 @@ packages/shared/
 
 **`package.json`** — `name: "@hakver/shared"`, `main: "./src/index.ts"`. Dependency: `zod`.
 
-**`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType` (TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER). Every enum defined in the Prisma schema must also be defined here.
+**`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType` (TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER, RANK). Every enum defined in the Prisma schema must also be defined here.
 
 **`error-codes.ts`** — Standard error codes. These codes are used in backend responses across all phases:
 - `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT, RESET_TOKEN_INVALID
@@ -155,6 +155,7 @@ packages/shared/
 - `VOTE_*`: ALREADY_VOTED, SELF_VOTE, NOT_FOUND
 - `COMMENT_*`: EDIT_COOLDOWN, ANONYMOUS_LOCKED, NOT_AUTHOR_TOPIC
 - `USER_*`: NOT_FOUND, RESTRICTED, BLOCKED, CHANGE_COOLDOWN, PROFILE_INCOMPLETE, ACCOUNT_DELETED, ACCOUNT_UNAVAILABLE
+- `AVATAR_*`: LOCKED (user attempted to select an avatar whose `requiredRankId` threshold has not been reached, or attempted to select a `category: "system"` avatar)
 - `REPORT_*`: ALREADY_REPORTED, SELF_REPORT
 - `MODERATION_*`: REASON_REQUIRED (moderator/admin action missing the mandatory reason field), ROLE_CHANGE_INVALID
 - `RATE_LIMIT_EXCEEDED`: user has hit the rate limit (HTTP 429). Response shape: `{ statusCode: 429, code: "RATE_LIMIT_EXCEEDED", message, retryAfter }`. The `message` is a formatted Turkish string that always shows the **largest non-zero unit pair** ("1 saat 15 dakika", "35 dakika", "45 saniye") — never zero-valued units like "0 saat 0 dakika". The authoritative format rule lives in `.claude/rules/security.md` → "Rate Limiting" section; every new rate-limited endpoint must reuse the same helper rather than inventing per-endpoint variants

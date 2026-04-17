@@ -35,10 +35,10 @@ In `packages/shared/src/schemas/notification.ts`:
 - createdAt: ISO date string
 - updatedAt: ISO date string (latest actor-append time; equals `createdAt` when `aggregatedCount === 1`)
 - aggregatedCount: integer ≥ 1 (1 for single-actor notifications, >1 for aggregated)
-- actors: `UserPublicCardSchema[]` (length 1..3). Always an array; the single-actor case carries a one-element array. The last three distinct actors sit here in most-recent-first order. Elements are card-shape only — firstName and lastName are never included
+- actors: `UserPublicCardSchema[]` (length 0..3). For `RANK_UP` the array is empty (the recipient is the only participant and the card is driven by the rank badge). The last three distinct actors sit here in most-recent-first order for engagement types. Elements are card-shape only — firstName and lastName are never included
 - isAnonymousAggregate: boolean (true when every actor rolled into the notification is an anonymous author; in that case `actors` is returned as an empty array, see aggregation rules in Section 3 step 9)
-- reference: `{ type: ReferenceType, id: UUID, title?: string }`
-- isStale: boolean (true when the referenced target is soft-deleted; see Section 5 L-4)
+- reference: `{ type: ReferenceType, id: UUID, title?: string }` — for `RANK_UP`, `type: "RANK"`, `id: rankId`, `title: rank.name` (e.g., `"Yargıç"`); the frontend hydrates the rank icon + color from its local ranks cache (`iconSlug`, `color` live on the `Rank` row)
+- isStale: boolean (true when the referenced target is soft-deleted; see Section 5 L-4). Always `false` for `RANK_UP` — ranks are never deleted
 - message: string (Turkish, user-facing — generated from type + actors array size + anonymity flags). For `ADMIN_BROADCAST` this field is left empty; the frontend renders `title` and `body` instead
 - title: string | null (populated only for `ADMIN_BROADCAST`; see Section 3.1)
 - body: string | null (populated only for `ADMIN_BROADCAST`; max 1000 characters)
@@ -65,10 +65,10 @@ In `packages/shared/src/schemas/notification.ts`:
 **`notification.service.ts`** — `createNotification(data)` (checks run in order; any negative check ends the call without creating a record):
 
 1. **Recipient health check:** skip when `User.deletedAt IS NOT NULL` — soft-deleted accounts never receive notifications
-2. **Self-notification prevention:** `actorId === userId` → skip (e.g., liking own comment)
-3. **Block check:** skip if a `UserBlock` row exists between recipient and actor in **either direction**
-4. **Per-type preference check:** skip if `UserNotificationPreference(userId, type)` exists with `enabled=false`. Absent row means enabled by default. `MENTIONED` and `TOPIC_UPDATED` are non-toggleable on the backend — the preference check is bypassed for these two types
-5. **Mute check** (topic-based): skip if `NotificationMute(userId, topicId)` exists for the referenced topic. **Exception: `MENTIONED` bypasses this check** — @mention is a personal signal and punches through topic mute
+2. **Self-notification prevention:** `actorId === userId` → skip (e.g., liking own comment). **Exception: `RANK_UP`** — this type is a self-signal about the user's own progression; the check is explicitly bypassed so the recipient receives the notification even though `actorId === userId`
+3. **Block check:** skip if a `UserBlock` row exists between recipient and actor in **either direction**. Does not apply to `RANK_UP` (actor is the recipient themselves)
+4. **Per-type preference check:** skip if `UserNotificationPreference(userId, type)` exists with `enabled=false`. Absent row means enabled by default. `MENTIONED` and `TOPIC_UPDATED` are non-toggleable on the backend — the preference check is bypassed for these two types. `RANK_UP` is toggleable (default on) — users who want a silent progression experience can disable it from the settings page
+5. **Mute check** (topic-based): skip if `NotificationMute(userId, topicId)` exists for the referenced topic. **Exception: `MENTIONED` bypasses this check** — @mention is a personal signal and punches through topic mute. `RANK_UP` has no topic reference so this check is a no-op
 6. **Actor-target idempotency** (L-5): applies to `TOPIC_VOTED`, `COMMENT_LIKED`, `TOPIC_COMMENTED`, and `COMMENT_REPLIED`. If the same `(userId=recipient, type, referenceId, actorId)` quadruple already has a record (read or unread) within the last 24 hours, **do not create a new record**; instead bump the existing record's `updatedAt`. This suppresses repeats across vote-withdraw-revote, like-unlike-like, and comment/reply delete-and-repost cycles (Phase 7 allows rapid soft-delete + recreate, which without this guard would spam the topic author with repeated notifications for the same adversary). Edge cases:
    - **Comment was soft-deleted then recreated:** the second `TOPIC_COMMENTED` within 24h matches the first via `referenceId = topicId` and `actorId = same user`; the existing (possibly read) notification is not duplicated
    - **Comment was soft-deleted then *edited* (author edits the original, not re-create):** no new notification fires — edit is not a trigger in Phase 7
@@ -140,6 +140,9 @@ Add notification hooks to existing modules:
 **Topic Module:**
 - When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notifications are fanned out asynchronously via BullMQ. Clearing the update note does not trigger a notification.
 
+**XP Module (Phase 8):**
+- When `checkAndUpdateRank` detects a first-time rank summit (new rank's `minXp` exceeds the previous `highestXpReached`) → `RANK_UP` notification to the user. `actorId` is set to the user themselves (self-notification prevention is explicitly bypassed for this type in Section 3 step 2). `referenceType: RANK`, `referenceId: newRankId`, `title: rank.name`. `actors` is stored as an empty set — the recipient is the only participant and the frontend renders a rank-badge card instead of an actor card. Aggregation does not apply. Actor-target idempotency is already enforced upstream via the `highestXpReached` watermark (Phase 8 Section 2), so notification-side idempotency is not needed. Per-type preference applies (default on; user may disable via `/users/me/notification-preferences`).
+
 **Default-off subscription policy (authoritative):**
 
 Voting on or commenting on a topic does **not** subscribe a user to that topic's update notifications. The platform-wide default is: non-author users receive no `TOPIC_UPDATED` notification unless they explicitly subscribed via the topic detail page. This keeps notification volume predictable for popular threads — a topic with thousands of voters does not inundate all of them every time the author edits the note.
@@ -188,9 +191,9 @@ Voting on or commenting on a topic does **not** subscribe a user to that topic's
         {
           "id": "...",
           "username": "ayse_k",
-          "avatar": { "url": "..." },
-          "rank": { "name": "Jüri Üyesi" },
-          "totalXp": 750,
+          "avatar": { "url": "/avatars/meraklı-baykus.svg" },
+          "rank": { "name": "Yargıç", "iconSlug": "gavel", "color": "indigo" },
+          "totalXp": 1750,
           "isDeletedAuthor": false
         }
       ],
@@ -234,6 +237,7 @@ Singular (`aggregatedCount === 1`):
 - `MENTIONED`: "{actor} sizi bir yorumda etiketledi"
 - `TOPIC_UPDATED`: "{actor} ilgilendiğiniz konuya bir güncelleme ekledi"
 - `COMMENT_HIGHLIGHTED`: "{actor} yorumunuzu öne çıkardı"
+- `RANK_UP`: "Yeni rütbe kazandın: {rank.name}" — `{rank.name}` is pulled from the notification's `reference.title` populated at creation time
 
 Aggregated (`aggregatedCount > 1`, only for the 4 aggregatable types):
 - `TOPIC_VOTED`: "{latest_actor} ve {count-1} kullanıcı konunuza oy verdi"
@@ -331,6 +335,7 @@ interface ActivityLogData {
 - Report create/review
 - Block/unblock
 - Login
+- **Rank change — first-time summit** (`user:rank-up`): written by `checkAndUpdateRank` (Phase 8 Section 2) when the new rank's `minXp` exceeds `previousHighestXpReached`. `metadata: { previousRankId, newRankId, trigger: "organic" | "admin-adjust" | "reconciliation" }`. Silent drift updates that re-enter a previously held rank do NOT produce a log entry (they are passive bookkeeping)
 
 **IP and User-Agent:** Taken from the request via `req.ip` and `req.headers['user-agent']`. Added automatically via the post-response interceptor described below.
 
@@ -357,7 +362,7 @@ Activity log writes run **after the HTTP response has been sent**, never inside 
 2. Delete security/moderation logs older than 1 year
 3. Log the cleanup count for monitoring
 
-The `action` field in the `ActivityLog` table is used to classify log type. Security/moderation actions: `restriction:*`, `report:*`, `block:*`, `account:delete`, `auth:login-failed`. Everything else is regular.
+The `action` field in the `ActivityLog` table is used to classify log type. Security/moderation actions: `restriction:*`, `report:*`, `block:*`, `account:delete`, `auth:login-failed`. Everything else is regular, including `user:rank-up`.
 
 **Notification retention:**
 - Notifications older than 90 days are automatically deleted by the same cron job
@@ -447,7 +452,7 @@ GET /admin/activity-logs (normal user) → 403
 ```
 
 ## Completion Criteria
-- [ ] All notification types are created (vote, comment, like, reply, mention, topic-updated)
+- [ ] All notification types are created (vote, comment, like, reply, mention, topic-updated, rank-up)
 - [ ] Notification listing and mark-as-read works
 - [ ] Topic-based muting works
 - [ ] Real-time notification via WebSocket works

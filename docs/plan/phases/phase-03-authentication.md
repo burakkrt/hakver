@@ -128,9 +128,9 @@ All writes in this flow happen inside a single `prisma.$transaction` so a partia
 3. Email and username uniqueness check
 4. Password is hashed with bcrypt (salt rounds: 12)
 5. User is created (`emailVerifiedAt: null`, `provider: LOCAL`, `totalXp: 0`)
-6. Default avatar is assigned (the avatar with `isDefault: true`)
+6. Default avatar is assigned by drawing one random row from the free-pool: `WHERE category = 'free' AND isActive = true ORDER BY RANDOM() LIMIT 1`. All 15 free-pool avatars are interchangeable initial-pool candidates — the previous single-`isDefault` behaviour is retired along with the `isDefault` field (Phase 2 Section 3)
 7. USER role is assigned
-8. **Initial rank assignment:** Look up the lowest-threshold active rank from the `Rank` table (`ORDER BY minXp ASC, sortOrder ASC LIMIT 1`) and set `user.currentRankId` to its id. With the seeded rank table this resolves to "Yeni Vatandaş" (0 XP). The assignment is part of the same transaction so every registered account always has a non-null `currentRankId` by the time the transaction commits — downstream card responses (`UserPublicCardSchema.rank.name`) never need to handle a null rank. The Phase 2 rank seed and Phase 8's `checkAndUpdateRank` reuse the same ordering rule
+8. **Initial rank assignment:** Look up the lowest-threshold active rank from the `Rank` table (`ORDER BY minXp ASC, sortOrder ASC LIMIT 1`) and set `user.currentRankId` to its id. With the seeded rank table this resolves to "Gözlemci" (0 XP). The assignment is part of the same transaction so every registered account always has a non-null `currentRankId` by the time the transaction commits — downstream card responses (`UserPublicCardSchema.rank.name`) never need to handle a null rank. The Phase 2 rank seed and Phase 8's `checkAndUpdateRank` reuse the same ordering rule. `User.highestXpReached` defaults to `0` and begins tracking from the first `awardXp` call
 9. 6-digit verification code is generated and stored in Redis (TTL: 10 minutes, key: `email-verify:{userId}`)
 10. Verification code is sent to the user's email via Resend (React Email template)
 11. Access + refresh tokens are returned

@@ -280,7 +280,7 @@ The update note is an author-controlled annotation that appears below the origin
 `GET /topics/:idOrSlug`:
 - All topic info + images
 - Author card: if `isAnonymous` → `displayName` and `iconType` from `AnonymousIdentity`, no user info returned
-- Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatar, rank.name, totalXp, isDeletedAuthor). Never include firstName/lastName on card responses — the card only identifies the author by username
+- Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatar.url, rank.{name, iconSlug, color}, totalXp, isDeletedAuthor). Never include firstName/lastName on card responses — the card only identifies the author by username
 - If the viewing user is the topic author and topic is anonymous → `isOwnTopic: true` flag in response (for the client to show "this is your topic")
 
 **Symmetric block 404 rule (authoritative):** Before any response shape is assembled, the service calls `BlockService.isBlocked(viewerId, topic.authorId)`. When `true` (and the topic is not anonymous), the endpoint responds with `404 Not Found` using the standard `{ code: "TOPIC_NOT_FOUND", message: "Konu bulunamadı" }` envelope. Returning 404 instead of 403 keeps the blocker/blocked relationship opaque to both parties — a blocked user cannot infer they were blocked from the status code. This rule applies to every interaction that resolves a topic by id or slug, so voting, commenting, bookmarking, and muting all surface the same "topic does not exist" response when the viewer is under a symmetric block. Moderators and admins with the `user:view-anonymous` permission bypass the block check; their oversight of reported content must not be impaired by user-level blocks.

@@ -123,7 +123,8 @@ Modal or full page:
 - Name displayed as "Ahmet D." (firstName full + lastName first character + ".") when viewing another user's profile. The owner of the profile sees their full surname instead
 - Age (calculated from dateOfBirth: `Math.floor((now - dob) / 365.25 / 24 / 60 / 60 / 1000)`)
 - Bio
-- Rank badge + XP
+- `<RankBadge rank={user.rank} size="lg" />` followed by an inline `<RankProgress />` (Phase 11 Section 11) showing distance to the next rank. The progress bar is fed by `currentXp = user.totalXp`, `currentRank = user.rank`, `nextRank = resolved client-side from the ranks cache by finding the lowest minXp > user.totalXp`. When the viewer holds the summit rank (Allâme) the progress bar collapses to a static "Zirve rütbeye ulaştınız" badge
+- Total XP label (`"{totalXp.toLocaleString('tr-TR')} XP"`) rendered next to the progress bar
 - Active restrictions (if any, warning banner)
 - If own profile → "Profili Düzenle" button
 
@@ -163,8 +164,15 @@ Sections:
 - Bio edit (textarea, max 500 character counter)
 
 **Avatar:**
-- Current avatar display
-- Preset avatars shown in a grid, click → select → save
+- Current avatar card (selected avatar image + primary-tone ring) displayed above the grid
+- Avatar grid: 39 total rows (15 free + 24 rank-locked). System-category avatars are filtered out at the backend (`GET /avatars`) and never appear here
+- Grid data sourced from `useAvatars()`; each entry carries `isLocked`, `requiredRank: { name, minXp, iconSlug, color } | null`, and `category`
+- Sort order: `category` (free first, then rank-locked ordered by `requiredRank.minXp`), then `sortOrder` ascending within each bucket
+- **Unlocked rows (`isLocked === false`):** clickable card with hover elevation. On click, `useChangeAvatar()` fires `PATCH /users/me/avatar`. On success → auth store updates, success toast `"Avatarın güncellendi"`. Optimistic UI keeps the grid responsive
+- **Locked rows (`isLocked === true`):** rendered with a translucent overlay (opacity ~0.35) plus a centered Lucide `Lock` icon. Selection is disabled (`aria-disabled="true"`, `role="button"`, `aria-label="{avatar.name}, {requiredRank.name} rütbesine ulaşınca açılır"`). Clicking the card triggers a tooltip/popover `"Bu avatar [Rank Name] rütbesine ulaşınca seçilebilir"` — no network request
+- **Hover reveal:** pointer-over removes the overlay with a 150ms transition so the viewer can preview the locked avatar in full color; leaving the card restores the overlay. On touch devices the same reveal fires after a 600ms long-press, released on pointer-up
+- Error surface: `AVATAR_LOCKED` (should not happen for unlocked cards, but defensive) or any other 4xx/5xx → error toast `"Bu avatarı şu an seçemezsin"`; the previous selection is kept
+- Accessibility: grid container has `role="radiogroup"`, `aria-label="Avatar seçimi"`. Each card is a `radio` (selected avatar has `aria-checked="true"`). Keyboard navigation uses arrow keys; Enter/Space activates. Focus outline respects the design system's `focus-visible` treatment
 
 **Username:**
 - Current username
@@ -233,6 +241,21 @@ Text content is fetched from the database (`ConsentVersion` table). Rendered wit
 
 Protected pages are wrapped with this guard.
 
+### 13. Rank-Up Celebration Flow
+
+When a `notification:new` WebSocket event (Phase 10) is dispatched with `type: "RANK_UP"`, the frontend launches a two-layer celebration so the user feels the summit in real time:
+
+1. **Instant toast** — a primary-tone toast fires immediately: `"Yeni rütbe kazandın: [Rank Name]. 3 yeni avatar kilidi açıldı!"`. The toast carries a secondary action button `"Avatarları incele"` deep-linking to `/profile/settings#avatar`
+2. **One-shot celebration modal — `<RankUpModal />`** under `src/components/shared/`:
+   - Rendered once per first-time summit, keyed by the notification's `reference.id` (the rank id) so repeated WebSocket retries do not stack modals
+   - Layout: large `<RankBadge size="lg" />` + congratulatory headline `"[Rank Name] rütbesine ulaştın!"` + a three-card preview strip of the newly unlocked avatars (pulled from the cached `useAvatars()` response by filtering `requiredRank.name === newRankName`)
+   - Primary CTA `"Avatarları incele"` navigates to `/profile/settings#avatar`; secondary CTA `"Şimdilik kapat"` dismisses
+   - Accessibility: `role="dialog"`, `aria-labelledby` pointing at the rank-name heading, initial focus trapped on the primary CTA, `Escape` dismisses, background scroll locked
+
+**Offline-at-rank-up recovery:** if the user is not connected when the rank-up fires (admin adjustment, reconciliation, background session), the WebSocket event is missed. On the next authenticated page load the auth provider calls `useNotifications()` (Phase 14) and, if the newest unread notification is a `RANK_UP`, the modal is triggered exactly once. The notification's `isRead` flag then becomes the "celebration consumed" marker — subsequent sessions never re-trigger the modal, even on a force refresh.
+
+**Client state:** `useRankCelebrationStore` (Zustand) holds `{ pendingModalRankId: string | null }`. Socket handler and the post-login notification fetch both call `setPendingModal(rankId)`; `<RankUpModal />` consumes and clears it. Writing a duplicate rank id is a no-op — the store matches backend idempotency.
+
 ## Security Checklist
 - [ ] Password fields have `type="password"` and autocomplete="new-password"/"current-password"
 - [ ] Form validation on both client and server side
@@ -284,8 +307,9 @@ cd apps/web && pnpm build
 - [ ] Profile completion works
 - [ ] Email verification works
 - [ ] Consent text approval works
-- [ ] Profile page works (self + others, privacy rules)
-- [ ] Profile settings works (all edit operations)
+- [ ] Profile page works (self + others, privacy rules, inline `<RankProgress />` on the header showing distance to next rank)
+- [ ] Profile settings works (all edit operations, including the 39-avatar grid with lock overlay, hover-reveal, tooltip, and `AVATAR_LOCKED` error surface)
+- [ ] Rank-up celebration flow (toast + one-shot modal) fires on `notification:new` with `type: "RANK_UP"` and on post-login catch-up; modal is idempotent per rank id
 - [ ] Account deletion works
 - [ ] Auth guard works on protected routes
 - [ ] Legal text pages are displayed

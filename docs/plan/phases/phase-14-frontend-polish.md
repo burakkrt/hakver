@@ -31,6 +31,7 @@
 - Single list — no tabs or grouping. Chronological order preserved (`updatedAt DESC`; aggregated cards sort by their latest actor's time)
 - Unread notifications get a highlighted background tint
 - **Important types** (`MENTIONED`, `COMMENT_HIGHLIGHTED`, `TOPIC_UPDATED`) are visually elevated: primary-tone vertical accent bar on the left edge of the card, primary-tone icon, and a soft background tint. Engagement types (`TOPIC_VOTED`, `TOPIC_COMMENTED`, `COMMENT_LIKED`, `COMMENT_REPLIED`) use the plain standard card style. The sort order stays chronological, but important cards catch the eye
+- **`RANK_UP` type** — rendered with a celebration-style card: the avatar slot is replaced with the `<RankBadge size="md" />` of the newly reached rank (the frontend reads `reference.title` for the rank name and looks up `iconSlug`/`color` from the local ranks cache). Background uses the rank's `color` token at a softer tint, and a subtle sparkle decoration sits in the corner. Headline = `message` ("Yeni rütbe kazandın: [Rank Name]"). Secondary action link: `"Avatarları incele"` → `/profile/settings#avatar`. `actors` is empty for this type; the card does not render an actor avatar stack. Stale handling (`isStale`) does not apply — ranks never soft-delete
 - **Aggregated card rendering:** when `aggregatedCount > 1`, the last 3 actor avatars stack horizontally with slight overlap and the headline shows "ayse_k ve {count-1} kullanıcı ...". For a single actor (`aggregatedCount === 1`) a single avatar + the standard message is shown
 - **Anonymous aggregate:** when the payload carries `isAnonymousAggregate: true`, a generic anonymous icon (mask) replaces the avatar and the headline becomes "Bir kullanıcı ..." or "12 kullanıcı ..." depending on count
 - **Stale notification (L-4):** cards with `isStale: true` render in grey/italic, avatar desaturated. Clicking does not navigate — a short info toast "Bu içerik artık mevcut değil" is shown instead. The card stays visible so the user keeps the history, but no actions are available
@@ -182,12 +183,14 @@ Check across all pages:
 - [ ] All images have meaningful `alt` text
 - [ ] Form elements have matching `label`
 - [ ] Error messages announced with `aria-live`
-- [ ] Focus trap works in modals
+- [ ] Focus trap works in modals (including `<RankUpModal />`)
 - [ ] Dropdown menus open and close with keyboard
 - [ ] Tab order is logical
-- [ ] Color contrast meets WCAG AA (4.5:1 text, 3:1 large text)
+- [ ] Color contrast meets WCAG AA (4.5:1 text, 3:1 large text) — verify every `<RankBadge />` color token (zinc, violet, blue, indigo, emerald, amber, rose, gold) against both light and dark backgrounds
 - [ ] Skip to content link works
 - [ ] Button and link semantics used correctly (clickable → button, navigation → link)
+- [ ] Avatar grid: radio-group semantics, keyboard arrow navigation, locked cards expose `aria-disabled="true"` with a descriptive `aria-label`, hover-reveal also triggers on keyboard focus so sighted keyboard users see the preview
+- [ ] `<RankProgress />` exposes `role="progressbar"` plus `aria-valuenow`/`aria-valuemin`/`aria-valuemax`
 
 ### 12. PostHog Event Tracking
 
@@ -199,6 +202,7 @@ Add event tracking to key user actions (PostHog provider set up in Phase 11):
 - `search_performed` — when user searches (with query)
 - `bookmark_toggled` — when user bookmarks/unbookmarks a topic
 - `share_clicked` — when user clicks a share button (with platform)
+- `rank_up` — fired from the rank-up celebration flow (Phase 12 Section 13) once per notification key. Properties: `{ previousRank: string, newRank: string, totalXp: number, daysSinceRegistration: number, trigger: "organic" | "admin-adjust" | "reconciliation" }`. Guarded by the same Zustand celebration store that backs `<RankUpModal />` so retries do not double-fire
 
 PostHog tracking respects cookie consent: only fires events if analytics consent is given.
 

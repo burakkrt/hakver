@@ -162,6 +162,23 @@ Zustand persist middleware persists only the `user` snapshot (id, username, avat
 - Animal icon + "Anonim Penguen #4521" displayName
 - Rank not shown
 
+**`src/components/shared/rank-badge.tsx`**:
+- Renders rank metadata as a tinted pill: Lucide icon (via `iconSlug`) + rank name text, with background/text color driven by the `color` semantic token from the `Rank` row
+- Props: `rank: { name: string, iconSlug: string, color: string }`, `size?: "sm" | "md" | "lg"` (default `"md"`)
+- Consumed by `user-card.tsx` (compact + profile variants), topic/comment author areas, the notification list RANK_UP card, the profile page header, and the admin user detail page
+- Color token map lives in `src/lib/rank-colors.ts`: `{ zinc, violet, blue, indigo, emerald, amber, rose, gold }` → Tailwind class bundles for light + dark mode. Icons resolve through a small `src/lib/rank-icons.ts` map that statically imports the required Lucide components (`eye`, `lightbulb`, `scale`, `gavel`, `book-open`, `landmark`, `sparkles`, `crown`) so the tree-shaker keeps bundle size minimal
+- Accessibility: `aria-label="[Rank.name] rütbesi"`; when inside interactive contexts, the rank pill is never the only target — the parent link/button holds the semantic role
+
+**`src/components/shared/rank-progress.tsx`**:
+- Inline progress bar showing distance to the next rank
+- Props: `currentXp: number`, `currentRank: { name, minXp, iconSlug, color }`, `nextRank: { name, minXp, iconSlug, color } | null` (null when the viewer already holds the summit rank)
+- Layout (mobile-first): current rank badge left, slim filled bar center, next-rank badge right. Below the bar a Turkish helper line: `"{nextRank.name} rütbesine {remainingXp.toLocaleString('tr-TR')} XP kaldı"`, or `"Zirve rütbeye ulaştınız"` when `nextRank === null`
+- Percentage fill = `(currentXp - currentRank.minXp) / (nextRank.minXp - currentRank.minXp)` clamped to `[0, 1]`. When `nextRank === null`, the bar renders fully filled with a gold accent
+- Accessibility: root element uses `role="progressbar"`, `aria-valuenow`, `aria-valuemin={currentRank.minXp}`, `aria-valuemax={nextRank?.minXp ?? currentRank.minXp}`, plus an aria-label describing the next-rank target
+- Consumed on the profile page header (Phase 12 Section 9); reusable elsewhere if future screens require a rank-progress surface
+
+**Lucide icon coverage:** the 8 rank icons (`eye`, `lightbulb`, `scale`, `gavel`, `book-open`, `landmark`, `sparkles`, `crown`) are all part of the standard `lucide-react` export surface — no custom SVGs needed. Lock icons (`Lock`) for the avatar grid and rank/star icons for notifications also come from the same package, keeping the icon dependency single-sourced.
+
 **`src/components/shared/empty-state.tsx`**:
 - Icon + title + description + optional action button
 - For cases like "Henüz konu yok", "Bildirim yok"
@@ -297,4 +314,6 @@ pnpm dev
 - [ ] Mobile-first responsive layout works
 - [ ] Dark mode toggle works (light/dark/system)
 - [ ] Search bar navigates to search results page
+- [ ] `<RankBadge />` renders the correct icon and color for each of the 8 seed ranks
+- [ ] `<RankProgress />` renders partial fill, summit state, and Turkish helper copy; `aria-valuenow`/`aria-valuemax` populated correctly
 - [ ] `pnpm build` succeeds without errors

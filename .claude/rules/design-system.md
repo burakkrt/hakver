@@ -74,3 +74,19 @@ Every color below must define both a light and a dark variant. Dark variants fol
 - **Hover:** Subtle scale or shadow increase
 - **Page transitions:** Fade-in
 - **Avoid unnecessary animations** — performance and accessibility first
+
+## Rank Badge
+
+- The `<RankBadge />` component is the canonical rendering of any rank-related visual. Do not render rank name text without the badge wrapper — rank identity is icon + color + name together
+- **Colors:** each rank carries a semantic color token seeded on the `Rank` row. The 8 current tokens are `zinc`, `violet`, `blue`, `indigo`, `emerald`, `amber`, `rose`, and `gold`. Keep contrast AA compliant on both light and dark surfaces
+- **Size variants:** `"sm"` (compact for lists), `"md"` (default for user cards and notifications), `"lg"` (profile header)
+- **Progress surface:** `<RankProgress />` uses the same tokens to tint the filled portion of the progress bar; summit state renders with a gold accent
+
+## Avatar Grid
+
+- Locked avatars use a translucent overlay (~0.35 opacity) plus a centered Lucide `Lock` icon
+- Hovering (pointer-over), receiving keyboard focus, or long-pressing on touch devices removes the overlay so the viewer can preview the locked avatar in full color; leaving the card restores the overlay
+- Locked avatars are not activatable — clicking/tapping reveals a tooltip stating the required rank; no network request is fired
+- Selected avatar carries a primary-tone ring
+- Every card exposes an `aria-label` describing its state (available / selected / locked + rank requirement). The grid container uses `role="radiogroup"` so assistive tech announces the selection model correctly
+- System-category avatars (the "Silinmiş Kullanıcı" placeholder) are never rendered in user-facing grids — they are a backend-only rendering concern
