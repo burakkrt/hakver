@@ -38,10 +38,12 @@
 **UserPublicCardSchema** (minimum author card — used in topic lists, topic details, comment lists, notification actors, vote lists, anywhere a user is represented alongside content):
 - id: UUID
 - username: string
-- avatarUrl: string
-- rankName: string
+- avatar: `{ url: string }`
+- rank: `{ name: string }` — rütbe adı (ör. "Aktif Üye")
+- totalXp: number
+- isDeletedAuthor: boolean — `true` when the referenced user is soft-deleted; frontend uses this to render an "Silinmiş Kullanıcı" styled anonymous card instead of the real username/avatar
 
-This schema intentionally excludes firstName and lastName. Full name is never shown next to content — the username is the primary public identifier across the platform.
+This schema intentionally excludes firstName and lastName. Full name is never shown next to content — the username is the primary public identifier across the platform. The card carries avatar, username, rank name, and total XP so gamification signals (rank badge, XP count) remain visible everywhere a user appears.
 
 **UserPublicResponseSchema** (data returned when viewing another user's full profile):
 - UserPublicCardSchema fields
@@ -59,7 +61,15 @@ This schema intentionally excludes firstName and lastName. Full name is never sh
 **UserAdminResponseSchema** (admin-only endpoints — the admin dashboard needs the full legal name for compliance and moderation):
 - UserPrivateResponseSchema fields (target user's full firstName and lastName)
 - role, active restrictions, recent XP logs, recent reports (populated by admin endpoints that return this shape)
-- Never exposed through public or self endpoints — only admin/moderator routes with the appropriate permission
+- Never exposed through public or self endpoints — only admin routes. Moderator routes receive `UserPublicResponseSchema` instead (masked surname, no full legal name)
+
+**ProfileUnavailableResponseSchema** (returned by `GET /users/:username` when the profile cannot be shown):
+- accountUnavailable: `true`
+- reason: `"DELETED" | "UNAVAILABLE"`
+  - `DELETED` → the target user is soft-deleted (`User.deletedAt IS NOT NULL`). Frontend renders "Bu kullanıcı hesabını silmiştir" info page
+  - `UNAVAILABLE` → a block relationship exists between the viewer and the target in either direction, OR the profile is otherwise restricted. Frontend renders a generic "Bu kullanıcı profili görüntülenemiyor" info page with no mention of blocking (prevents the blocked party from discovering they are blocked)
+
+Both variants share the same page layout; only the heading and help copy differ. The profile page never uses different HTTP status codes to distinguish these cases — 200 with the structured flag keeps the frontend behaviour uniform and avoids leaking block signals via 403 vs 404 timing.
 
 ### 2. Permission Guard System
 
@@ -124,6 +134,13 @@ user/
 
 ### 5. Profile Viewing Privacy Rules
 
+**`GET /users/:username` response branching** (determined by the service layer before field masking):
+1. Target user is soft-deleted → return `ProfileUnavailableResponseSchema` with `reason: "DELETED"`
+2. A block relationship exists between viewer and target (either direction) → return `ProfileUnavailableResponseSchema` with `reason: "UNAVAILABLE"`
+3. Viewer is the target (viewing own profile) → return `UserPrivateResponseSchema`
+4. Viewer is an admin → return `UserAdminResponseSchema` (audited via `admin:user-view` ActivityLog, see Phase 15)
+5. Otherwise (normal public view) → return `UserPublicResponseSchema`
+
 **When viewing another user's profile (`GET /users/:username` → UserPublicResponseSchema):**
 - firstName: full (e.g.: "Ahmet") — the first name is not secret; only the family name is abbreviated for identity protection
 - lastName: first character + "." (e.g.: "Demir" → "D.") — rendered together as "Ahmet D."
@@ -135,7 +152,7 @@ user/
 - All fields are returned in full, including the owner's full surname
 
 **When representing a user alongside content (topic cards, comment cards, notification actors — UserPublicCardSchema):**
-- username, avatarUrl, rankName only
+- id, username, avatar (url), rank (name), totalXp, isDeletedAuthor only
 - firstName and lastName are NOT returned on card responses. Any list, feed, or WebSocket event that includes a user reference must use the card schema, not the profile schema
 - This is a security-critical rule: the family name must not leak into feeds, notifications, search results, or any non-profile response
 
@@ -144,6 +161,18 @@ user/
 - These endpoints require the admin role and are audited via the activity log
 
 All masking transformations are performed **in the service / DTO mapping layer**, not with Prisma `select`. This keeps the business rule in a single place and prevents accidental leakage when a new endpoint is added.
+
+### 5.1. Deleted-Author Propagation on Card Responses
+
+Every endpoint that returns a `UserPublicCardSchema` populates `isDeletedAuthor` based on `User.deletedAt`:
+- Active user → `isDeletedAuthor: false`, real username / avatar / rank / totalXp shown
+- Soft-deleted user → `isDeletedAuthor: true`. The backend still returns a schema-compliant card, but substitutes the display fields so no leaked username or avatar appears:
+  - `username` → `"Silinmiş Kullanıcı"` (constant label; the raw `deleted_{uuid}` username is never returned to clients)
+  - `avatar.url` → the default "silinmis" avatar (maintained in the Avatar seed list)
+  - `rank.name` → `null`-replaced with an empty string, or the card simply omits the rank badge — frontend hides rank when `isDeletedAuthor` is `true`
+  - `totalXp` → `0` (deleted accounts do not expose XP)
+
+Deleted users do NOT receive notifications, do NOT trigger fan-out, and do NOT appear in search, trending, or bookmark listings. See Phase 10 fan-out rules for the recipient-side filter.
 
 ### 6. Username Change
 
@@ -248,7 +277,7 @@ GET /api/v1/users/me → 200, all fields (private), full lastName
 GET /api/v1/users/testuser → 200, firstName full + lastName initial (e.g. "Ahmet D."), no email/dateOfBirth/gender
 GET /api/v1/users/nonexistent → 404
 # Card shape: any list endpoint's author object has no firstName/lastName keys
-GET /api/v1/topics → each topic.author contains { id, username, avatarUrl, rankName } only
+GET /api/v1/topics → each topic.author contains { id, username, avatar: { url }, rank: { name }, totalXp, isDeletedAuthor } only
 
 # 2. Profile update
 PATCH /api/v1/users/me { bio: "test" } → 200

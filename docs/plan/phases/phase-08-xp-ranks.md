@@ -120,23 +120,26 @@ When content is soft-deleted, XP handling depends on who performed the deletion:
 
 ### 4. Displaying Rank Info in Responses
 
-Add rank info to all endpoints that return a user card:
+Rank and XP are part of the `UserPublicCardSchema` defined in Phase 4. Every endpoint that returns a user card already emits this shape:
 
 ```json
 {
   "id": "...",
   "username": "...",
   "avatar": { "url": "..." },
-  "rank": { "name": "Aktif Üye", "minXp": 500 },
-  "totalXp": 750
+  "rank": { "name": "Aktif Üye" },
+  "totalXp": 750,
+  "isDeletedAuthor": false
 }
 ```
 
 This info is visible in:
 - Author info on topic cards
 - Author info on comment cards
-- User profile page
-- (Rank is not shown on anonymous cards)
+- Notification actor cards
+- User profile page header (in addition to profile-only fields such as bio and masked name)
+
+Rank is not shown on anonymous cards — they render the animal icon + anonymous display name instead of a username/rank pair.
 
 ### 5. Admin XP Configuration
 

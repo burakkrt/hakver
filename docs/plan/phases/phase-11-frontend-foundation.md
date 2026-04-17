@@ -133,21 +133,27 @@ Tokens are stored in `localStorage`. With Zustand persist middleware.
 
 ### 10. Twemoji Integration
 
+**Self-hosted SVG assets (no CDN):**
+- Twemoji SVG asset pack is copied into `apps/web/public/twemoji/` during the build (or via a one-time setup script that reads from the `@twemoji/svg` npm package). Assets are committed/released with the app — they are not fetched from a third-party CDN at runtime
+- This keeps the CSP tight (no external `img-src` allowlist entry is needed for Twemoji) and guarantees offline-friendly rendering
+- The Next.js image optimizer serves these assets; Tailwind config already allows `/public` as a same-origin source
+
 **`src/lib/twemoji.ts`**:
-- Twemoji parse function: converts Unicode emojis in text to Twemoji SVGs
-- React component: `<TwemojiText text="..." />` — renders emojis in text
+- Twemoji parse function: converts Unicode emojis in text to Twemoji SVGs. The parser is configured with `base: "/twemoji/"` and `ext: ".svg"` so it points at the self-hosted copies
+- React component: `<TwemojiText text="..." />` — renders emojis in text using the self-hosted assets
 
 **Emoji Picker:**
-- Emoji picker component with `emoji-mart` library
+- Emoji picker component with `emoji-mart` library (itself bundled locally, no external image fetch)
 - `<EmojiPicker onSelect={(emoji) => ...} />`
 - Shown inside a popover
 
 ### 11. Shared Components
 
 **`src/components/shared/user-card.tsx`**:
-- Compact / card variant (used in topic lists, topic detail author area, comment lists, notification actors, vote lists): Avatar + username + rank badge. No firstName/lastName. Renders `UserPublicCardSchema`
-- Full / profile header variant (used only on `/profile/[username]`): Avatar + username + rank badge + the formatted name "Ahmet D." (firstName full + lastName first character + "."). Owner of the profile sees the full surname instead. Renders `UserPublicResponseSchema` for others, `UserPrivateResponseSchema` for owner
-- Anonymous variant: animal icon, displayName (e.g., "Anonim Penguen #4521")
+- Compact / card variant (used in topic lists, topic detail author area, comment lists, notification actors, vote lists): Avatar + username + rank badge + totalXp. No firstName/lastName. Renders `UserPublicCardSchema`
+- Full / profile header variant (used only on `/profile/[username]`): Avatar + username + rank badge + totalXp + the formatted name "Ahmet D." (firstName full + lastName first character + "."). Owner of the profile sees the full surname instead. Renders `UserPublicResponseSchema` for others, `UserPrivateResponseSchema` for owner
+- Anonymous variant: animal icon, displayName (e.g., "Anonim Penguen #4521") — rank/XP suppressed
+- **Deleted-author variant** (`isDeletedAuthor === true`): Render the card with the default "silinmis" avatar, the fixed label "Silinmiş Kullanıcı" in place of the username, and suppress rank and XP. The card remains clickable only inside admin views (which have separate handling); in the public feed, the card is non-interactive and does not link to a profile (the unavailable-profile page is surfaced from the global profile route handler instead)
 - The compact variant must never receive firstName/lastName props — this is a platform-wide identity rule
 
 **`src/components/shared/anonymous-card.tsx`**:

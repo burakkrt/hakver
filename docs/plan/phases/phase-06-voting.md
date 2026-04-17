@@ -92,6 +92,7 @@ Under `apps/api/src/websocket/`:
 - Room structure: `topic:{topicId}` room for each topic
 - Client joins room with `joinTopic` event when entering topic page
 - Client leaves room with `leaveTopic` event when leaving page
+- **CORS:** Configure the gateway's `cors` option explicitly with `{ origin: [FRONTEND_URL, ADMIN_URL], credentials: true, methods: ['GET', 'POST'] }`. Socket.io does not inherit Express CORS settings — the gateway needs its own origin list matching the REST API's allowed origins policy. Wildcard origins are forbidden
 
 **WebSocket JWT Verification:**
 - Client sends `auth: { token: accessToken }` when establishing connection

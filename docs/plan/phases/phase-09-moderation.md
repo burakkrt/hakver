@@ -21,7 +21,10 @@
 - categoryId: UUID
 - reasonId: UUID
 - expiresAt: ISO date (must be in the future)
-- note: max 500 (optional)
+- note: max 500 (optional free-text — the structured `reasonId` already satisfies the mandatory-reason security rule; `note` adds moderator-specific context)
+
+**RemoveRestrictionSchema** (body of `DELETE /moderation/restrictions/:id`):
+- reason: min 5, max 500 characters, required (Turkish user-facing text). Lifting an active restriction is an accountability event; moderators/admins must document why the restriction ended early so the action shows up in the activity log audit trail
 
 **CreateReportSchema:**
 - targetType: "TOPIC" | "COMMENT" | "USER"
@@ -58,7 +61,7 @@ moderation/
 |--------|------|------|-------------|
 | POST | /moderation/restrictions | Moderator+ | Apply restriction |
 | GET | /moderation/restrictions | Moderator+ | Active restrictions list |
-| DELETE | /moderation/restrictions/:id | Admin | Remove restriction early |
+| DELETE | /moderation/restrictions/:id | Admin | Remove restriction early (body requires `reason`) |
 | GET | /users/:username/restrictions | Public | User's active restrictions |
 | GET | /moderation/restriction-categories | Public | Restriction categories and reasons |
 
@@ -71,6 +74,14 @@ moderation/
 6. Is there already an active restriction for the same action on the same user? If yes → 409
 7. Create `UserRestriction` record
 8. Save activity log
+
+**Restriction removal flow** (`DELETE /moderation/restrictions/:id`):
+1. Validation with `RemoveRestrictionSchema` — `reason` field is required (min 5, max 500)
+2. Check if the restriction exists and is still active
+3. Hard delete (or set `revokedAt`) the `UserRestriction` record
+4. Write `ActivityLog` entry: `action: "restriction:remove"`, `metadata: { reason, previousExpiresAt, removedBy }`
+5. Response: 200 with the removed restriction summary
+6. Validation error when `reason` missing or too short: 400 `{ code: "MODERATION_REASON_REQUIRED", message: "Kısıtlamayı kaldırmak için sebep girilmelidir" }`
 
 **Restriction check (RestrictionGuard):**
 The guard whose infrastructure was set up in Phase 4 is activated here. On every protected endpoint:
@@ -139,7 +150,7 @@ Blocking means "I don't want to see or interact with this person at all." The fo
 - Comment listing: blocked users' comments are excluded (except anonymous comments — identity is unknown)
 - Voting: cannot vote on blocked user's topic (topic returns 404, so voting endpoint is unreachable)
 - Commenting: cannot comment on blocked user's topic (topic returns 404)
-- Profile: blocked user's profile → 404 Not Found
+- Profile: blocked user's profile → `GET /users/:username` returns `ProfileUnavailableResponseSchema` with `reason: "UNAVAILABLE"` (see Phase 4). The response intentionally looks identical to the response for a soft-deleted account's "unavailable" variant so the blocked party cannot deduce they were blocked
 - Notifications: no notifications from blocked users (already defined in Phase 10)
 
 This is a symmetric check: if User A blocks User B, then User A cannot see User B's content AND User B cannot see User A's content. This prevents harassment scenarios.

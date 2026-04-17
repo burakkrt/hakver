@@ -73,10 +73,28 @@ Add notification hooks to existing modules:
 - When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner
 - When a like is given → `COMMENT_LIKED` notification to comment owner
 - When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card if anonymous comment).
+- When the topic author highlights a comment (`PATCH /comments/:id/highlight`) → `COMMENT_HIGHLIGHTED` notification to the comment author. Skipped when the topic author highlights their own comment (self-notification prevention). Removing the highlight does not trigger a notification. Idempotent PATCH (re-highlighting an already-highlighted comment) does not produce a duplicate notification
 
 **Topic Module:**
-- When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notification fanned out to users who voted on the topic and users who commented on the topic, minus the author themselves, minus users who muted the topic, minus users who have a mutual block with the author. The fan-out runs asynchronously via a BullMQ job to keep the request fast and avoid blocking the author's response. Clearing the update note does not trigger a notification.
-- Deduplication: if the author replaces the note while a previous `TOPIC_UPDATED` notification from the same topic is still unread by the recipient, update the existing notification's `createdAt` and keep it unread instead of creating a duplicate record. This prevents notification spam when the author iterates on the text.
+- When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notifications are fanned out asynchronously via BullMQ. Clearing the update note does not trigger a notification.
+
+**Fan-out recipient rules:**
+- Include: users who voted on the topic (Vote.userId) ∪ users who commented on the topic (Comment.authorId)
+- Exclude the topic author themselves
+- Exclude users whose `User.deletedAt IS NOT NULL` (soft-deleted accounts never receive notifications)
+- Exclude users who muted the topic (NotificationMute row for this topic)
+- Exclude any user who has a block relationship with the author in **either direction** — that is, if `UserBlock(blockerId=recipient, blockedId=author)` OR `UserBlock(blockerId=author, blockedId=recipient)` exists, skip the recipient. Hakver's block policy is symmetric; one-way block counts as both-way here
+- Anonymous comments still count toward the recipient list (the anonymous commenter still gets notified about updates to a topic they engaged with)
+
+**Fan-out execution (BullMQ):**
+- The fan-out producer runs the single recipient query (DISTINCT userId across Vote + Comment, with all filters applied in SQL) and splits the result into **batches of 500 recipients**
+- Each batch is enqueued as its own BullMQ job (`topic-updated-fanout` queue). Jobs run in parallel with the worker concurrency limit
+- Each job inserts its batch of `Notification` rows in a single `createMany` and pushes WebSocket events to each online recipient
+- Failed jobs use the standard retry policy (3 attempts, exponential backoff) and fall back to the dead-letter queue
+- This chunking keeps individual transactions bounded (no 10k-row inserts), gives isolation between batches (one job failure doesn't block others), and lets the queue worker concurrency dictate throughput
+
+**Deduplication:**
+- If the author replaces the note while a previous `TOPIC_UPDATED` notification from the same topic is still unread by the recipient, update the existing notification's `createdAt` and keep it unread instead of creating a duplicate record. This prevents notification spam when the author iterates on the text
 
 ### 5. Notification Listing
 
@@ -91,9 +109,12 @@ Add notification hooks to existing modules:
       "isRead": false,
       "createdAt": "...",
       "actor": {
+        "id": "...",
         "username": "testuser",
-        "avatarUrl": "...",
-        "rank": "Aktif Üye"
+        "avatar": { "url": "..." },
+        "rank": { "name": "Aktif Üye" },
+        "totalXp": 750,
+        "isDeletedAuthor": false
       },
       "reference": {
         "type": "TOPIC",
@@ -122,6 +143,7 @@ Add notification hooks to existing modules:
 - `COMMENT_REPLIED`: "{actor} yorumunuza yanıt verdi"
 - `MENTIONED`: "{actor} sizi bir yorumda etiketledi"
 - `TOPIC_UPDATED`: "{actor} ilgilendiğiniz konuya bir güncelleme ekledi"
+- `COMMENT_HIGHLIGHTED`: "{actor} yorumunuzu öne çıkardı"
 
 ### 6. WebSocket Notification Delivery
 

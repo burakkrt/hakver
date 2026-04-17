@@ -180,7 +180,7 @@ base-uri 'self';
 - Cloudinary image domain whitelisted in `img-src`
 - API and WebSocket URLs whitelisted in `connect-src`
 - `frame-src 'none'` prevents clickjacking
-- Adjust as needed for Twemoji CDN, Google OAuth redirects, and other external resources
+- Twemoji assets are self-hosted from `/public/twemoji/` (Phase 11), so no external CDN needs an `img-src` entry. If future features pull from new external sources (Google OAuth profile pictures, third-party embeds), add those origins explicitly to the relevant directive
 - CSP violations should be logged (report-uri or report-to) for monitoring
 
 ### 5. Performance Check

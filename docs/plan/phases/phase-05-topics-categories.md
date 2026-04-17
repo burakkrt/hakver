@@ -45,8 +45,10 @@
 - content: string (truncated to 200 characters)
 - hasUpdate: boolean — `true` when `updateNote` is populated; enables the "Güncellendi" badge on the card
 
-**UpdateNoteSchema** (request DTO — used by the update-note endpoint):
-- updateNote: min 1, max 500 characters — set to `null` (or empty payload with explicit clear flag) to remove the existing note
+**UpdateNoteSchema** (request DTO — used by the `PATCH /topics/:id/update-note` endpoint):
+- updateNote: min 1, max 500 characters (HTML stripped)
+
+Clearing the note is not done via this schema — use `DELETE /topics/:id/update-note` for the clear operation. This keeps PATCH semantics strictly for set/replace.
 
 `packages/shared/src/schemas/category.ts`:
 
@@ -194,17 +196,28 @@ Image add and remove operations follow the same 12-hour editing window (`editabl
 
 The update note is an author-controlled annotation that appears below the original topic content after the 12-hour editing window has closed. It does not mutate the original title or content — it is a separate, timestamped addition used to inform the community about what happened after the topic was posted (inspired by the "UPDATE" convention on Reddit-style communities).
 
-`PATCH /topics/:id/update-note`:
-1. Topic author check (`authorId === currentUser.id`)
-2. `deletedAt !== null` check
-3. Validation with `UpdateNoteSchema` (max 500 characters, HTML stripped)
-4. Update `topic.updateNote` and set `topic.updateNoteAt = now()`
-5. Trigger `TOPIC_UPDATED` notification (Phase 10) when the note transitions from empty to populated OR when a populated note is replaced with new content; suppress the notification on no-op writes
+`PATCH /topics/:id/update-note` — write action, full guard chain required.
 
-`DELETE /topics/:id/update-note`:
-1. Topic author check
-2. Clear `updateNote` and `updateNoteAt`
-3. No notification is sent on clear
+**Guard chain:** `JWT → Verified → ProfileComplete → Restriction(topic:edit) → Author check`. Each guard returns the standard error code with a Turkish message when it rejects (see `error-codes.ts`).
+
+1. JWT guard — valid access token
+2. Verified guard — `emailVerifiedAt !== null`
+3. ProfileComplete guard — `username`, `firstName`, `lastName` all populated
+4. Restriction guard — no active `topic:edit` restriction on the user
+5. Author check — `topic.authorId === currentUser.id` (otherwise 403 "Sadece konu sahibi güncelleme notu ekleyebilir")
+6. `deletedAt !== null` check (otherwise 404)
+7. Validation with `UpdateNoteSchema` (min 1, max 500, HTML stripped)
+8. Update `topic.updateNote` and set `topic.updateNoteAt = now()`
+9. Trigger `TOPIC_UPDATED` notification (Phase 10) when the note transitions from empty to populated OR when a populated note is replaced with new content; suppress the notification on no-op writes (same content as before)
+
+`DELETE /topics/:id/update-note` — clear action, same guard chain.
+
+**Guard chain:** `JWT → Verified → ProfileComplete → Restriction(topic:edit) → Author check`. Same error surface as PATCH.
+
+1. JWT + Verified + ProfileComplete + Restriction(topic:edit) + Author check (same as PATCH)
+2. `deletedAt !== null` check
+3. Clear `updateNote` and `updateNoteAt`
+4. No notification is sent on clear
 
 **Rate limit:** update-note writes are rate limited to 5 requests per hour per topic to prevent notification spam.
 
@@ -216,6 +229,12 @@ The update note is an author-controlled annotation that appears below the origin
 1. Author or user with `topic:delete` permission check
 2. `deletedAt = now()` (soft delete)
 3. Images are not deleted from Cloudinary (soft delete consistency)
+
+**Moderator deletion — mandatory reason:** When the deleter is a moderator/admin (not the author), the request body must include a `reason` field (min 5, max 500 characters, HTML stripped, Turkish user-facing text). This satisfies the security rule that moderator content-removal actions must carry a reason recorded in the activity log:
+- Request body for moderator delete: `{ reason: "Spam ve tekrarlayan içerik" }`
+- Validation: if the deleter is not the author and `reason` is missing or too short → 400 `{ code: "MODERATION_REASON_REQUIRED", message: "Moderatör silme işlemi için sebep girilmelidir" }`
+- The reason is written to the `ActivityLog` entry (`action: "topic:delete"`, `metadata: { reason, deletedBy: "moderator" }`) and is visible in the admin panel's report/user detail views
+- Authors deleting their own topics do not supply a reason (self-delete is not an accountability event)
 
 ### 10. Topic Listing
 
@@ -238,7 +257,7 @@ The update note is an author-controlled annotation that appears below the origin
 `GET /topics/:id`:
 - All topic info + images
 - Author card: if `isAnonymous` → `displayName` and `iconType` from `AnonymousIdentity`, no user info returned
-- Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatarUrl, rankName). Never include firstName/lastName on card responses — the card only identifies the author by username
+- Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatar, rank.name, totalXp, isDeletedAuthor). Never include firstName/lastName on card responses — the card only identifies the author by username
 - If the viewing user is the topic author and topic is anonymous → `isOwnTopic: true` flag in response (for the client to show "this is your topic")
 
 ### 12. Anonymous Topic Response Rules

@@ -127,6 +127,19 @@ Modal or full page:
 
 Name rendering is driven by the API response shape. The frontend does not truncate the family name client-side — the backend returns the already-abbreviated string. This ensures the full surname is never present in client memory, devtools, or browser history for other users' profiles.
 
+**Unavailable-profile variant** (`accountUnavailable: true` in the API response):
+
+When `GET /users/:username` returns `ProfileUnavailableResponseSchema`, the profile page renders a calm, branded info page instead of the standard header/tabs:
+- Centered layout, matches the rest of the site's typography and spacing (uses the same card pattern as the empty-state component)
+- Neutral icon (e.g., user-slash or a generic silhouette — not an alarming symbol)
+- Heading + body text chosen from `reason`:
+  - `DELETED` → heading "Bu kullanıcı hesabını silmiştir", body "Kullanıcı hesabını kapattığı için profil görüntülenemiyor. Kullanıcının daha önceki katkıları, kart gösterimlerinde anonim olarak korunur."
+  - `UNAVAILABLE` → heading "Bu profil görüntülenemiyor", body "Bu kullanıcının profili şu anda görüntülenemiyor." (generic; never mentions or hints at blocking — this is a privacy-critical rule)
+- Single CTA: "Ana sayfaya dön" button linking to `/`
+- No tabs, no topic list, no bookmark panel — the page is strictly an informational dead-end
+
+The page is a Server Component for SEO (returns the same unavailable layout to bots, no indexing signal for the underlying identity). `<meta name="robots" content="noindex">` is set on this variant to avoid search engines caching stale profile URLs.
+
 **Profile tabs:**
 - Topics: list of topics created by the user
 - Votes: topics the user voted on (only visible on own profile)

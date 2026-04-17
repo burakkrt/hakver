@@ -39,7 +39,7 @@ AuthProvider: LOCAL, GOOGLE
 VoteType: RIGHT, WRONG
 ReportTargetType: TOPIC, COMMENT, USER
 ReportStatus: PENDING, REVIEWED, RESOLVED, DISMISSED
-NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED
+NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED, COMMENT_HIGHLIGHTED
 ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER
 ```
 
@@ -170,6 +170,9 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | isEdited | Boolean | default false |
 | lastEditedAt | DateTime? | |
 | likeCount | Int | default 0, denormalized |
+| isHighlighted | Boolean | default false — topic author marks a comment as "öne çıkarılan" (highlighted); see Phase 7 highlight flow |
+| highlightedAt | DateTime? | timestamp of the highlight action; used to sort multiple highlighted comments |
+| highlightedById | FK → User? | the user who highlighted this comment (always the topic author; preserved for audit and moderator review) |
 | deletedAt | DateTime? | soft delete |
 
 #### CommentLike
@@ -331,6 +334,7 @@ Additional indexes for performance:
 - `Topic`: `(categoryId, createdAt DESC)` — category-based listing
 - `Topic`: `(authorId, createdAt DESC)` — user topics
 - `Comment`: `(topicId, likeCount DESC)` — like-based sorting
+- `Comment`: `(topicId, isHighlighted DESC, highlightedAt DESC)` — highlighted comments float to top of listing
 - `Vote`: `(topicId)` — topic-based vote counting
 - `XpLog`: `(userId, createdAt)` — daily XP calculation
 - `ActivityLog`: `(userId, createdAt DESC)` — activity queries

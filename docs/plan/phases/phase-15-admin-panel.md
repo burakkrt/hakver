@@ -155,8 +155,10 @@ Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL
 - Pagination
 
 **User detail** (`/users/[username]`):
-- Profile info (UserAdminResponseSchema — full firstName and lastName exposed for moderation/compliance)
-- A dedicated "Kimlik Bilgileri" section visually groups full legal name and ID-adjacent fields so admins understand that this data is accessible only on admin routes. Access is audit-logged via the activity log
+- **Admin** viewing the page → backend returns `UserAdminResponseSchema` with the full firstName and lastName
+- **Moderator** viewing the page → backend returns `UserPublicResponseSchema` (firstName tam, lastName ilk harf + ".") — moderator sees the masked name because the legal-name access is reserved for admins and compliance reviews
+- A dedicated "Kimlik Bilgileri" section on the admin view visually groups the full legal name and ID-adjacent fields so admins understand that this data is accessible only on admin routes. The moderator view hides this section entirely and shows the masked name inline with the profile summary
+- **Data-access audit:** Every time an admin view of this endpoint is served (i.e., full firstName + lastName returned), the backend writes an `ActivityLog` entry with `action: "admin:user-view"`, `metadata: { viewedUserId, viewerId }`. Moderator views are not audited at this level (they do not receive the full legal name). This is a KVKK/veri-koruma denetim izi for legal-name access
 - Role badges
 - **XP Management section (Admin only):**
   - Current XP and rank display
@@ -170,6 +172,39 @@ Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL
 - Recent reports against this user
 - Topics and comments by this user (with links)
 - Action buttons: Apply restriction, Change role (Admin only)
+
+### 7.1. Admin Role Change
+
+`PATCH /admin/users/:id/role` (Admin only):
+
+**Request body:**
+```json
+{
+  "role": "USER" | "MODERATOR" | "ADMIN",
+  "reason": "Topluluk moderasyonu için yeni moderatör atandı"
+}
+```
+
+**Validation:**
+- `role` must be one of the three enum values
+- `reason`: min 5, max 500 characters, required
+- Cannot demote the last remaining ADMIN (prevents locking out all admins) → 400 `{ code: "MODERATION_ROLE_CHANGE_INVALID", message: "Son yönetici hesabının rolü değiştirilemez" }`
+- Cannot change your own role → 403 `{ code: "MODERATION_ROLE_CHANGE_INVALID", message: "Kendi rolünüzü değiştiremezsiniz" }`
+- Target user must exist and not be soft-deleted
+
+**Flow:**
+1. Replace the user's role assignment (`UserRole` table — remove old role, insert new role)
+2. Invalidate all active sessions of the target user (forces re-login with new permissions, avoids stale JWT)
+3. Write `ActivityLog` entry: `action: "user:role-change"`, `metadata: { previousRole, newRole, reason }`
+4. Response: 200 with the updated user summary
+
+Error code for missing reason: `{ code: "MODERATION_REASON_REQUIRED", message: "Rol değişikliği için sebep girilmelidir" }`
+
+**UI** (admin user detail page, admin only):
+- "Rol Değiştir" button opens a modal
+- Role selector (dropdown), reason textarea (mandatory, min 5 chars)
+- Submit → calls `PATCH /admin/users/:id/role`
+- Success toast: "Kullanıcının rolü güncellendi"
 
 ### 8. Category Management (`/categories`) — Admin Only
 

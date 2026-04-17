@@ -45,6 +45,8 @@
 - `useDeleteComment()` → DELETE /comments/:id (mutation)
 - `useLikeComment()` → POST /comments/:id/like (mutation)
 - `useUnlikeComment()` → DELETE /comments/:id/like (mutation)
+- `useHighlightComment()` → PATCH /comments/:id/highlight (mutation — topic author only)
+- `useUnhighlightComment()` → DELETE /comments/:id/highlight (mutation — topic author only)
 
 `src/hooks/use-categories.ts`:
 - `useCategories()` → GET /categories (query)
@@ -80,6 +82,7 @@
 - Bookmark icon (filled if bookmarked, click to toggle)
 - Pinned badge (if isPinned — "Sabitlenmiş" label, pinned topics shown at top of list)
 - Update badge (if `hasUpdate` — "Güncellendi" label, signals that the author added a post-window update note)
+- **`isEdited` is NOT surfaced on the card.** Edit history is meta-information; showing both "Güncellendi" and "Düzenlendi" at the same time clutters the card and dilutes the signal. The `isEdited` state only appears on the topic detail page (as a small "düzenlendi" hint next to the date). Cards prioritize the "Güncellendi" badge when `hasUpdate` is true
 - Card click → navigate to topic detail
 
 **Infinite scroll:** Automatically load next page when approaching the bottom.
@@ -167,17 +170,25 @@ When "Edit" button is clicked on the topic detail page:
 
 **`src/components/comment/comment-item.tsx`**:
 - Author card (or anonymous card)
+- **"Konu Sahibi" badge** (when `isAuthor === true` on the response): small, professional pill rendered next to the author card — muted primary-tone background, small label "Konu Sahibi", Lucide icon (e.g., user-check). Never shown on anonymous topics (the `isAuthor` flag is server-side forced to `false` there)
+- **"Öne Çıkarılan" badge** (when `isHighlighted === true`): rendered on the comment card with a star icon (Lucide `star`, filled, primary-tone). The whole comment card gets a subtle accent border/background so the highlight is visually obvious in a long list. Tooltip on the star: "Konu sahibi bu yorumu öne çıkardı"
 - Comment text (Twemoji render)
-- "düzenlendi" label (if applicable)
+- "düzenlendi" label (if applicable) — small meta hint, rendered subtly next to the date. Remains on comments on both cards and detail, unlike topic cards which hide it (comments don't have an independent "güncellendi" signal)
 - Like button + count (filled heart if liked)
 - "Reply" button → opens reply input area
-- Action menu (if own comment: Edit, Delete | everyone: Report)
+- Action menu:
+  - If own comment: Edit, Delete, Report
+  - Everyone: Report
+  - **If viewer is the topic author** (and the comment is on their topic): additional "Öne Çıkar" / "Öne Çıkarmayı Kaldır" menu item. Button label toggles based on current `isHighlighted` state. Kept inside the action menu (not as a prominent button) to match the discreet professional pattern — highlighting is a considered action, not an impulse button
+  - Confirmation toast after highlight: "Yorum öne çıkarıldı" / "Öne çıkarma kaldırıldı"
 - Deleted comment: "Bu yorum silindi" gray text
+- If `isAuthor` and `isHighlighted` are both true, both badges show side by side (topic author highlighted their own follow-up) — both pills sit on the same row, spacing consistent
 
 **`src/components/comment/comment-reply.tsx`**:
 - Level 2 comment component (slightly indented)
 - "@username" mention highlight
-- Same actions (like, edit, delete, report)
+- Same isAuthor and isHighlighted treatment as level 1 (reply from topic author gets the "Konu Sahibi" badge; replies can also be highlighted)
+- Same actions (like, edit, delete, report, and the topic-author-only highlight toggle)
 
 **`src/components/comment/comment-form.tsx`**:
 - Textarea + emoji picker
@@ -298,9 +309,14 @@ cd apps/web && pnpm build
 - [ ] Topic creation works (form, image upload, anonymous, category)
 - [ ] Voting UI works (vote, change, withdraw, real-time)
 - [ ] Comment system works (create, reply, like, edit, delete)
+- [ ] "Konu Sahibi" badge renders on comments written by the topic author (non-anonymous topics only)
+- [ ] "Öne Çıkarılan" star badge renders on highlighted comments; highlighted comments float to the top of the comment list regardless of sort
+- [ ] Topic author can highlight/unhighlight comments from the action menu; toast confirmation shown
 - [ ] Update-note modal works (add, edit, clear) and the "Güncelleme" block renders on the detail page with the "Güncellendi" badge on cards
+- [ ] "Düzenlendi" label suppressed on topic cards and only shown on topic detail page
 - [ ] 2-level nesting renders correctly
 - [ ] Anonymous cards display correctly
+- [ ] Deleted author cards render as "Silinmiş Kullanıcı" (no real username/avatar leak)
 - [ ] Emoji picker works
 - [ ] WebSocket real-time updates work
 - [ ] Reporting and blocking UI works

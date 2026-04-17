@@ -34,11 +34,14 @@
 - "Tümünü okundu işaretle" button (top bar)
 - Infinite scroll
 
-**Notification message formats:**
+**Notification message formats** (authoritative source is Phase 10; this list mirrors it for frontend reference):
 - TOPIC_VOTED: "[Actor] konunuza oy verdi" → /topics/:slug
 - TOPIC_COMMENTED: "[Actor] konunuza yorum yaptı" → /topics/:slug
-- COMMENT_LIKED: "[Actor] yorumunuzu beğendi" → /topics/:slug
-- COMMENT_REPLIED: "[Actor] yorumunuza yanıt verdi" → /topics/:slug
+- COMMENT_LIKED: "[Actor] yorumunuzu beğendi" → /topics/:slug (scrolls to the liked comment via `#comment-{id}` anchor)
+- COMMENT_REPLIED: "[Actor] yorumunuza yanıt verdi" → /topics/:slug (scrolls to the reply)
+- MENTIONED: "[Actor] sizi bir yorumda etiketledi" → /topics/:slug (scrolls to the comment containing the mention)
+- TOPIC_UPDATED: "[Actor] ilgilendiğiniz konuya bir güncelleme ekledi" → /topics/:slug (scrolls to the "Güncelleme" block)
+- COMMENT_HIGHLIGHTED: "[Actor] yorumunuzu öne çıkardı" → /topics/:slug (scrolls to the highlighted comment)
 
 **Note:** Notifications older than 90 days are automatically cleaned up by the backend cron job (Phase 10). The frontend doesn't need to handle this — it simply fetches whatever notifications exist.
 
@@ -159,7 +162,7 @@ On all data-fetching pages and components:
 - Profile topics empty: "Henüz konu açmamış"
 - Comments empty: "İlk yorumu siz yapın"
 - Notifications empty: "Bildiriminiz yok"
-- Search no results (future): "Sonuç bulunamadı"
+- Search no results: "Aramanızla eşleşen konu bulunamadı. Farklı anahtar kelimeler deneyin." — implemented in Phase 13 (search results page). Phase 14 audits the component and ensures the shared `empty-state.tsx` renders it consistently
 
 Each with an `empty-state.tsx` component, with appropriate icon and message.
 
