@@ -27,12 +27,12 @@
 - No sensitive data in any response (password hash, tokens, other users' personal info, IP addresses, user-agent strings)
 - Anonymous content: the real user identity is never exposed in API responses except to users with the view-anonymous permission through a dedicated moderator field
 
-## Identity Display Rules
-- Username is the primary public identifier across the platform — topic cards, comment cards, notification actors, and vote listings show only username
-- Full name and surname are never shown outside the profile page. On the profile page, the viewer sees the given name in full and the family name abbreviated to a single initial with a period (e.g., "Ahmet D.")
-- Own profile view exposes the owner's full name to the owner
-- Admin dashboard may display the full legal name to authorized roles for moderation and compliance purposes
-- Name masking is enforced in the service/DTO layer so that no endpoint, bug path, or error response can leak the full family name to other users
+## Identity Display Rules (applies to backend and frontend — no exceptions)
+- Username is the primary public identifier across the platform — topic cards, comment cards, notification actors, and vote listings show only username. Never firstName or lastName
+- Full name and surname are never shown outside the profile page. On the profile page, the viewer sees the given name in full and the family name abbreviated to a single initial with a period (e.g., "Ahmet Demir" → `"Ahmet D."` for every viewer who is not the owner)
+- Own profile view exposes the owner's full name to the owner only
+- Admin dashboard may display the full legal name to authorized admin roles for moderation and KVKK compliance; moderator routes receive the masked form. Admin access to the full name is audit-logged (`admin:user-view` ActivityLog entry)
+- Name masking is enforced in the **service / DTO layer** on the backend so that no endpoint, bug path, or error response can leak the full family name to other users. The frontend also enforces the same rule at render time (never concatenate `firstName + lastName` on card components). Mirror requirement lives in `.claude/rules/frontend.md` → "Identity display"
 
 ## XP & Concurrency
 - XP mutations must be executed inside a database transaction with row-level protection against concurrent awards; a single action must not grant duplicate XP under race conditions

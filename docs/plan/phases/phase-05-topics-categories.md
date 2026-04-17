@@ -28,7 +28,8 @@
 - editableUntil: ISO date string
 - voteCountRight: number
 - voteCountWrong: number
-- commentCount: number
+- commentCount: number — level-1 (parent) comments only, excludes replies
+- replyCount: number — level-2 replies only, surfaced only on the detail shape below the comment list (card payload omits this field)
 - category: `{ id, name, slug }`
 - author: `UserPublicCardSchema | AnonymousCardSchema` (based on isAnonymous)
 - images: `{ id, url, sortOrder }[]`
@@ -36,6 +37,7 @@
 - myVote: `"RIGHT" | "WRONG" | null` (only when authenticated)
 - isOwnTopic: boolean (only when authenticated and topic is anonymous)
 - isMuted: boolean (only when authenticated, from Phase 10)
+- isSubscribed: boolean (only when authenticated, from Phase 10) — non-authors: `true` when a `TopicSubscription` row exists; authors: always `true` (implicit subscription to their own topic)
 - updateNote: string | null — author-written update appended below the original content
 - updateNoteAt: ISO date string | null — timestamp of the latest update-note change
 - createdAt: ISO date string
@@ -43,22 +45,13 @@
 **TopicListItemSchema** (truncated version for list endpoints):
 - id, title, slug, isAnonymous, voteCountRight, voteCountWrong, commentCount, category, author, coverImage, myVote, hasUpdate, createdAt
 - content: string (truncated to 200 characters)
+- commentCount: number — mirrors the detail shape; counts level-1 comments only, so the card displays "X yorum" with X matching the number of top-level entries visible when the user opens the topic. Replies are deliberately excluded from the card signal to keep the number predictable
 - hasUpdate: boolean — `true` when `updateNote` is populated; enables the "Güncellendi" badge on the card
 
 **UpdateNoteSchema** (request DTO — used by the `PATCH /topics/:id/update-note` endpoint):
 - updateNote: min 1, max 500 characters (HTML stripped)
 
 Clearing the note is not done via this schema — use `DELETE /topics/:id/update-note` for the clear operation. This keeps PATCH semantics strictly for set/replace.
-
-`packages/shared/src/schemas/category.ts`:
-
-**CategoryResponseSchema** (response DTO):
-- id: UUID
-- name: string
-- slug: string
-- description: string | null
-- isActive: boolean
-- sortOrder: number
 
 **CreateTopicSchema:**
 - title: min 5, max 150 characters
@@ -74,10 +67,18 @@ Clearing the note is not done via this schema — use `DELETE /topics/:id/update
 - categorySlug: string (optional)
 - page: number, default 1, min 1
 - limit: number, default 20, min 1, max 50
-- sort: "newest" | "popular" | "trending" (optional, default "newest")
-- search: string (optional, min 2 characters)
+- sort: `"newest" | "popular" | "trending" | "controversial"` (optional, default `"trending"`)
+- search: string (optional, min 2 characters — enables free-text search via the same endpoint; see Section 10)
 
 `packages/shared/src/schemas/category.ts`:
+
+**CategoryResponseSchema** (response DTO):
+- id: UUID
+- name: string
+- slug: string
+- description: string | null
+- isActive: boolean
+- sortOrder: number
 
 **CreateCategorySchema:**
 - name: min 2, max 50
@@ -138,7 +139,6 @@ topic/
 | POST | /topics/:id/images | JWT + Verified | Add image to topic |
 | DELETE | /topics/:id/images/:imageId | JWT + Verified | Remove image |
 | PATCH | /topics/:id/cover | JWT + Verified | Set cover image (author only, within editableUntil) |
-| GET | /topics/search | Public | Search topics by title (ILIKE query, paginated) — same query params as topic list + `search` parameter |
 | POST | /topics/:id/bookmark | JWT + Verified | Bookmark topic |
 | DELETE | /topics/:id/bookmark | JWT + Verified | Remove bookmark |
 | GET | /users/me/bookmarks | JWT | My bookmarked topics (paginated) |
@@ -152,9 +152,13 @@ topic/
 4. **Restriction check:** `restriction.guard` checks for active restrictions (`topic:create` action)
 5. Check if category exists and `isActive: true`
 6. Create topic:
-   - `slug` field is auto-generated from the title (Turkish character support, unique — appends `-2`, `-3` on collision)
+   - `slug` field is composed as `{slugifiedTitle}-{shortKey}` where:
+     - `slugifiedTitle` normalises the title to kebab-case with Turkish character support (`ö→o`, `ü→u`, `ş→s`, `ç→c`, `ğ→g`, `ı→i`, whitespace and punctuation collapsed to `-`, lowercased, trimmed). If the normalised title exceeds 80 characters it is truncated at the last word boundary ≤ 80 chars to keep URLs readable
+     - `shortKey` is a 7-character [Base62](https://en.wikipedia.org/wiki/Base62) (`0-9A-Za-z`) random identifier generated per topic with a cryptographically strong RNG. 7 chars yields ~3.5 trillion distinct keys, making a collision on the same slug effectively impossible in MVP-scale traffic (birthday-paradox collision probability stays well below `10^-9` until billions of rows)
+     - Example: title `"En güzel tatil anınız"` → slug `"en-guzel-tatil-aniniz-a3Kx9Pb"`. The short key at the end is a stable, SEO-safe suffix that also acts as the canonical disambiguator, so the old `-2`, `-3` retry scheme is retired entirely
+     - Collision handling: the service performs the insert under the normal unique constraint; on the vanishingly rare collision Prisma throws and the service regenerates `shortKey` once and retries. No user-visible error
    - `editableUntil = createdAt + 12 hours`
-   - `voteCountRight = 0`, `voteCountWrong = 0`, `commentCount = 0`
+   - `voteCountRight = 0`, `voteCountWrong = 0`, `commentCount = 0`, `replyCount = 0`
 7. If `isAnonymous: true` → create `AnonymousIdentity` record:
    - Select a random `iconType` from the animal list
    - Generate a random 4-digit number
@@ -169,10 +173,14 @@ Penguen, Baykuş, Tilki, Panda, Koala, Yunus, Kelebek, Kartal, Kurt, Aslan, Kedi
 
 `POST /topics/:id/images`:
 1. Topic author check
-2. Existing image count check (max 4)
-3. File validation (size, type)
-4. Upload to Cloudinary
-5. Create `TopicImage` record
+2. File validation — size and MIME type declared by the upload; magic-bytes validation (Task 4.4 of Phase 5 upload service) must also pass before any Cloudinary call
+3. Cloudinary upload (idempotent from the client's perspective even though not from the service's; the temporary Cloudinary asset is deleted if step 4 aborts)
+4. **Count-guarded insert inside a `prisma.$transaction`:**
+   - Acquire a row-level lock on the parent Topic: `SELECT id FROM "Topic" WHERE id = :topicId FOR UPDATE` (raw query inside the transaction)
+   - Count existing images for this topic (`SELECT count(*) FROM "TopicImage" WHERE topicId = :topicId`)
+   - If the count is already ≥ 4 → abort the transaction, delete the just-uploaded Cloudinary asset via `uploadService.deleteImage(publicId)`, respond 400 `{ code: "TOPIC_IMAGE_LIMIT_EXCEEDED", message: "Bir konuya en fazla 4 görsel ekleyebilirsiniz" }`
+   - Otherwise insert the `TopicImage` row with the next `sortOrder`. If this is the first image on the topic, also set `topic.coverImageId` to the new row
+5. The row-level lock serialises concurrent uploads on the same topic, so two simultaneous requests at `count=3` can no longer race past the check. The pattern mirrors `withUserXpLock` (Phase 8) — the lock is held for a single short transaction only, so cross-topic uploads remain fully parallel
 6. Response: `{ id, url, sortOrder }`
 
 File received via multipart form-data (`@nestjs/platform-express` Multer).
@@ -241,24 +249,43 @@ The update note is an author-controlled annotation that appears below the origin
 `GET /topics`:
 - Pagination: offset-based (`page`, `limit`)
 - Filtering: `categorySlug` (optional)
-- Search: `search` query parameter (optional) — PostgreSQL ILIKE on title field. Minimum 2 characters.
-- Sorting:
-  - `newest`: `createdAt DESC`
-  - `popular`: `voteCountRight + voteCountWrong DESC`
-  - `trending`: time-weighted engagement score — `(voteCountRight + voteCountWrong + commentCount) / pow(hoursSinceCreation + 2, 1.5) DESC`. Calculated in-query using PostgreSQL `EXTRACT(EPOCH FROM (NOW() - "createdAt")) / 3600` for hours. This ensures recent topics with high engagement rank above old topics with accumulated votes.
-- Pinned topics always appear at the top regardless of sort order: `ORDER BY isPinned DESC, {selected sort}`
+- Search: `search` query parameter (optional) — PostgreSQL ILIKE on title field via the `pg_trgm` GIN index from Phase 2. Minimum 2 characters
+  - **Result cache:** Search responses are cached in Redis with a 60-second TTL keyed by the normalised request signature (`search:v1:{lowercaseTrimmedQuery}:{categorySlug}:{sort}:{page}:{limit}`). The first request for a query hits Postgres, subsequent identical requests inside the window return the cached payload. Cache entries are invalidated implicitly by TTL; no write path busts them because a 60-second horizon is tight enough to keep results near-fresh
+  - **No extra per-user rate limit on search:** the global request limiter (Phase 3) still applies but search-specific throttling is intentionally avoided. The cache absorbs burst load without penalising legitimate users
+  - `meta.cacheHit: boolean` optional field on paginated responses lets the frontend tell cached from fresh results during QA (never shown in UI)
+- Sorting (all reads are O(log n) on the relevant precomputed column's index):
+  - `newest`: `ORDER BY isPinned DESC, createdAt DESC`
+  - `popular`: `ORDER BY isPinned DESC, (voteCountRight + voteCountWrong) DESC, createdAt DESC`
+  - `trending`: `ORDER BY isPinned DESC, trendingScore DESC, createdAt DESC`. `trendingScore` is recomputed every 5 minutes by the "Trending Score Recompute" cron (Phase 17). The formula weights engagement over age:
+    ```
+    trendingScore = (voteCountRight + voteCountWrong + commentCount + replyCount) / pow(hoursSinceCreation + 2, 1.5)
+    ```
+    Topics older than 7 days are left at `trendingScore = 0`, so an old popular topic cannot dominate the trending tab after the community has moved on — only recent engagement competes
+  - `controversial`: `ORDER BY isPinned DESC, controversialScore DESC, createdAt DESC`. `controversialScore` is recomputed by the same cron. The formula rewards topics where the community is split AND the total engagement is meaningful:
+    ```
+    totalVotes = voteCountRight + voteCountWrong
+    balance    = (totalVotes > 0) ? min(voteCountRight, voteCountWrong) / max(voteCountRight, voteCountWrong) : 0
+    engagement = ln(1 + totalVotes + commentCount + replyCount)
+    controversialScore = balance * engagement / pow(hoursSinceCreation + 2, 1.2)
+    ```
+    The `balance` factor is close to 1 when the vote split is near 50/50 and close to 0 when one side dominates. The gentler time decay (`^1.2` vs `^1.5`) keeps a genuinely contested topic visible slightly longer than a purely trending one, because controversy needs time to accumulate both sides. Topics older than 7 days also drop to `0` on the same rule as trending. Pinned topics continue to float above everything else
+- Pinned topics always appear at the top regardless of sort order; the `(isPinned DESC, ...)` prefix on every index ensures the query plan stays on the precomputed column even when pinned topics are present
 - `deletedAt: null` filter (soft delete middleware)
 - For each topic: id, title, content (truncated 200 char), author card (or anonymous card), category, vote counts, comment count, image count, createdAt
 - If authenticated: `myVote: "RIGHT" | "WRONG" | null` — the current user's vote on this topic (requires a batch query or LEFT JOIN on the Vote table)
-- **Block filter:** If current user exists, exclude topics from blocked users
+- **Symmetric block filter:** When an authenticated user calls this endpoint, exclude any topic whose author has a block relationship with the viewer in **either direction**. Implementation: `BlockService.isBlocked(viewerId, authorId)` returns `true` when a row exists in `UserBlock` with `(blockerId = viewerId AND blockedId = authorId)` OR `(blockerId = authorId AND blockedId = viewerId)`. Anonymous topics bypass the block filter because the author identity is not exposed — the anonymous author's content is still visible to everyone by design
 
 ### 11. Topic Detail
 
-`GET /topics/:id`:
+`GET /topics/:idOrSlug`:
 - All topic info + images
 - Author card: if `isAnonymous` → `displayName` and `iconType` from `AnonymousIdentity`, no user info returned
 - Author card: if not `isAnonymous` → `UserPublicCardSchema` (id, username, avatar, rank.name, totalXp, isDeletedAuthor). Never include firstName/lastName on card responses — the card only identifies the author by username
 - If the viewing user is the topic author and topic is anonymous → `isOwnTopic: true` flag in response (for the client to show "this is your topic")
+
+**Symmetric block 404 rule (authoritative):** Before any response shape is assembled, the service calls `BlockService.isBlocked(viewerId, topic.authorId)`. When `true` (and the topic is not anonymous), the endpoint responds with `404 Not Found` using the standard `{ code: "TOPIC_NOT_FOUND", message: "Konu bulunamadı" }` envelope. Returning 404 instead of 403 keeps the blocker/blocked relationship opaque to both parties — a blocked user cannot infer they were blocked from the status code. This rule applies to every interaction that resolves a topic by id or slug, so voting, commenting, bookmarking, and muting all surface the same "topic does not exist" response when the viewer is under a symmetric block. Moderators and admins with the `user:view-anonymous` permission bypass the block check; their oversight of reported content must not be impaired by user-level blocks.
+
+This same "no-leak" principle governs blocked accounts throughout the platform: a user under a symmetric block with the viewer must never be discoverable via URL guess, API probe, listing, search, vote roster, comment thread, notification, or mention autocomplete. Every endpoint that can materialise such a reference calls `BlockService.isBlocked` and applies the same 404/UNAVAILABLE response pattern. See Phase 9 Section 5 for the cross-module checklist of touch points this rule applies to.
 
 ### 12. Anonymous Topic Response Rules
 
@@ -304,7 +331,7 @@ The `_moderatorInfo` field is only returned to users with the `user:view-anonymo
 - [ ] Topic deletion can only be done by the author or moderator/admin
 - [ ] New user prerequisite check cannot be bypassed
 - [ ] Restriction check is active
-- [ ] Blocked users' content is filtered
+- [ ] Symmetric block filter is applied on listing AND detail — blocked users' topics return 404 on detail and are hidden on listing regardless of which side initiated the block
 - [ ] No SQL injection risk (Prisma parameterized queries)
 
 ## Test Plan

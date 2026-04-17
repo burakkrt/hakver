@@ -59,14 +59,19 @@ async withUserXpLock<T>(userId: string, callback: (tx) => Promise<T>): Promise<T
 Runs inside `withUserXpLock(userId, ...)`:
 
 1. Find the action from the `XpAction` table. If `isActive: false` → do not award XP
-2. **Badge bonus hook (detailed design pending — see "Detailed Design Pending Items" in `plan.md`):** `applyUserBonuses(userId, action, basePoints)` reads the user's active badges from `UserBadge` and, for each badge whose `bonusEffect` is `XP_GAIN_MULTIPLIER` with a scope matching the current action, applies the percentage to `basePoints`. Multiple matching bonuses are **summed** (10% + 20% = 30%), not multiplied. At MVP launch this helper is in place as a placeholder; since the active badge catalog is minimal, it passes `basePoints` through unchanged for most users. The full bonus math is finalized in the separate badge design
-3. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. The daily cap check is applied to `adjustedPoints` (after bonus), because the limit should cap the user's real gain. If `dailyTotal + adjustedPoints > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit
-4. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → check `XpLog` for existing positive entries with `(userId, action=COMMENT_CREATE)` and `metadata.topicId === currentTopicId`. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again. If a positive entry exists → do not award XP. The `metadata` JSON field stores `{ topicId }` to avoid joining the Comment table
-5. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's **trimmed** character count less than 10? If yes → do not award XP. `trim()` prevents bypass via whitespace-only content
-6. Create `XpLog` record (`points: adjustedPoints`, with `metadata` — when a bonus was applied, include `{ ..., appliedBonuses: [{ badgeCode, percent }] }` so debug and reconciliation have full traceability)
-7. Update `User.totalXp += adjustedPoints`
-8. **Rank check:** `checkAndUpdateRank(userId)`
-9. **Badge earn check (detailed design pending):** call `BadgeService.checkAndAwardBadges(userId, event)` — did the user just cross a badge condition from this XP/action? If so, insert a `UserBadge` row and emit a badge-earned notification. The full details are defined when the badge catalog is finalized
+2. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. If `dailyTotal + basePoints > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit
+3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → check `XpLog` for existing positive entries with `(userId, action=COMMENT_CREATE)` and `metadata.topicId === currentTopicId`. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again. If a positive entry exists → do not award XP. The `metadata` JSON field stores `{ topicId }` to avoid joining the Comment table
+4. **Minimum content quality check (XP gate only — comment is always stored):** If action is `COMMENT_CREATE`, evaluate the comment's **trimmed** content against all three conditions. Any failure skips XP. The comment itself is never rejected by this rule; Phase 7's Zod schema is the only authoritative validation for whether a comment saves:
+   - Trimmed length ≥ 10 characters (whitespace-only bypass is prevented by the trim)
+   - At least 3 distinct **non-whitespace** characters — blocks trivial spam like `"aaaaaaaaaa"` while letting natural short Turkish replies pass (any three-letter distinct set in "tamam mı", "evet evet", "harika" clears this easily)
+   - Distinct non-whitespace ratio ≥ 25% of trimmed non-whitespace length — lenient enough to keep repeated emphasis patterns like "tamamm tamamm" (distinct `{t,a,m, }`; non-whitespace length 12, distinct non-whitespace count 3 → 25%) valid, while still rejecting `"hahahahahaha"` (2 distinct out of 12 → 16%). Whitespace is excluded from both numerator and denominator so sentence-level spacing does not skew the ratio
+   
+   The ratio was lowered from an earlier 30% draft after reviewing Turkish phrasing patterns — short genuine replies with limited alphabet (e.g., emoji clusters, repeated affirmations) were tripping the stricter threshold. 25% preserves spam resistance while respecting natural short Turkish text
+5. Create `XpLog` record (`points: basePoints`)
+6. Update `User.totalXp += basePoints`
+7. **Rank check:** `checkAndUpdateRank(userId)`
+
+> **Badge system integration is intentionally deferred.** The badge catalog, per-badge XP bonus semantics, and the badge-earn award hook are not part of MVP — see `plan.md` "Detailed Design Pending Items". When the design ships, this flow will be revisited to insert the bonus-application and badge-award steps.
 
 **`revokeXp(userId, action, referenceType, referenceId)`:**
 

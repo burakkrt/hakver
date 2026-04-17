@@ -65,6 +65,8 @@ moderation/
 | GET | /users/:username/restrictions | Public | User's active restrictions |
 | GET | /moderation/restriction-categories | Public | Restriction categories and reasons |
 
+**Authority-promotion interaction (authoritative reference, Phase 15):** When an account gains an authority role (MODERATOR, ADMIN, future authority roles) through `PATCH /admin/users/:id/role`, all of its `UserRestriction` rows are deleted inside the same transaction that swaps the role. This prevents a promoted account from being blocked from the actions it is now expected to supervise. A demotion to USER does not restore the cleared restrictions. See Phase 15 Section 7.1 for the full role-change flow.
+
 **Restriction application flow:**
 1. Validation with `ApplyRestrictionSchema`
 2. Check if target user exists
@@ -144,19 +146,29 @@ The guard whose infrastructure was set up in Phase 4 is activated here. On every
 4. Create `UserBlock` record
 
 **Effects of blocking (full blocking policy — retroactive to all existing modules):**
-Blocking means "I don't want to see or interact with this person at all." The following filters must work:
-- Topic listing: blocked users' topics are completely excluded
-- Topic detail: blocked user's topic → 404 Not Found (as if it doesn't exist)
-- Comment listing: blocked users' comments are excluded (except anonymous comments — identity is unknown)
-- Voting: cannot vote on blocked user's topic (topic returns 404, so voting endpoint is unreachable)
-- Commenting: cannot comment on blocked user's topic (topic returns 404)
-- Profile: blocked user's profile → `GET /users/:username` returns `ProfileUnavailableResponseSchema` with `reason: "UNAVAILABLE"` (see Phase 4). The response intentionally looks identical to the response for a soft-deleted account's "unavailable" variant so the blocked party cannot deduce they were blocked
-- Notifications: no notifications from blocked users (already defined in Phase 10)
+Blocking means "I don't want to see or interact with this person at all." The check is always **symmetric**: if User A blocks User B, User A cannot see User B's content AND User B cannot see User A's content. This prevents harassment scenarios and avoids information leakage about who blocked whom.
 
-This is a symmetric check: if User A blocks User B, then User A cannot see User B's content AND User B cannot see User A's content. This prevents harassment scenarios.
+The following touch points must all call `BlockService.isBlocked(viewerId, targetId)` and honour its verdict:
+- Topic listing: blocked users' topics are completely excluded from the listing payload
+- Topic detail (`GET /topics/:idOrSlug`): returns `404 Not Found` with the standard `TOPIC_NOT_FOUND` envelope (see Phase 5 Section 11). Not 403 — the blocker/blocked relationship stays opaque
+- Comment listing: blocked users' comments are excluded from the response (exception: anonymous comments, since their author is concealed by design)
+- Voting (`POST|PATCH|DELETE /topics/:topicId/votes`): unreachable because the topic resolves to 404 under the symmetric block
+- Commenting (`POST /topics/:topicId/comments`): unreachable for the same reason
+- Comment like (`POST|DELETE /comments/:id/like`): the containing topic is unreachable; even on direct hit the service re-checks the block and returns 404
+- Comment highlight (`PATCH|DELETE /comments/:id/highlight`): same 404 behaviour when the viewer/author pair is symmetrically blocked
+- Bookmark, mute, report endpoints that resolve a topic or user: all return 404 under a symmetric block
+- Profile (`GET /users/:username`): returns `ProfileUnavailableResponseSchema` with `reason: "UNAVAILABLE"` (Phase 4). The envelope is deliberately identical to the one used for other "unavailable" cases so the blocked party cannot deduce they were blocked
+- Mention autocomplete / user search: candidates under a symmetric block with the viewer are filtered out before the response is emitted
+- Notifications: already covered by the fan-out and creation filters (Phase 10 Section 3 step 3)
+- WebSocket rooms: server refuses `joinTopic` when the topic resolves to 404 for the viewer under a symmetric block
 
-**BlockService** helper method:
-`isBlocked(userId, targetUserId): boolean` — Other modules use this service to check block status.
+**BlockService helper (authoritative):**
+```
+isBlocked(viewerId: string, targetId: string): Promise<boolean>
+```
+Checks `UserBlock` for a row matching `(blockerId = viewerId AND blockedId = targetId)` OR `(blockerId = targetId AND blockedId = viewerId)`. Returns `true` if either direction exists. The helper is the single point of truth — every module calls it rather than hand-rolling the `OR` predicate, so a future change (e.g., block grace period, block tiers) only touches one file.
+
+The helper is also exposed as a `@WithBlockCheck('paramName')` decorator that modules can attach to controller handlers to short-circuit to `404 TOPIC_NOT_FOUND` (or the relevant resource's NOT_FOUND) automatically.
 
 ### 6. Admin Restriction Category Management
 

@@ -165,23 +165,35 @@ Add `helmet` middleware to `main.ts` (if not already present):
 - X-XSS-Protection enabled
 - HSTS header (in production)
 
-**Content Security Policy (CSP) configuration:**
+**Content Security Policy (CSP) configuration** — production CSP uses per-request nonces for both script-src and style-src so `'unsafe-inline'` can be removed entirely. Nonces are generated in a Next.js middleware (`app/middleware.ts`) on every request, forwarded to server components via the request context, and emitted on every `<script>` and inline `<style>` tag Next.js renders.
+
+Production header template (backend `main.ts` and Next.js middleware both produce the same directives; the backend header protects API-served pages, the Next.js header protects the app itself):
+
 ```
 default-src 'self';
-script-src 'self';
-style-src 'self' 'unsafe-inline';
+script-src 'self' 'nonce-{request-nonce}';
+style-src 'self' 'nonce-{request-nonce}';
 img-src 'self' res.cloudinary.com data:;
 font-src 'self';
 connect-src 'self' {API_URL} {SOCKET_URL};
 frame-src 'none';
 object-src 'none';
 base-uri 'self';
+form-action 'self';
+report-uri /csp-report;
 ```
+
 - Cloudinary image domain whitelisted in `img-src`
 - API and WebSocket URLs whitelisted in `connect-src`
 - `frame-src 'none'` prevents clickjacking
 - Twemoji assets are self-hosted from `/public/twemoji/` (Phase 11), so no external CDN needs an `img-src` entry. If future features pull from new external sources (Google OAuth profile pictures, third-party embeds), add those origins explicitly to the relevant directive
-- CSP violations should be logged (report-uri or report-to) for monitoring
+- CSP violations are reported to `POST /csp-report` (Next.js route handler) and forwarded to Pino `warn` so violations show up in Railway logs alongside the rest of the request telemetry
+
+**Rollout plan for the nonce change:**
+
+1. First release after this plan: ship the nonce-based CSP but keep `'unsafe-inline'` in the directive **and** enable the report-only header (`Content-Security-Policy-Report-Only`) in parallel. This lets us observe real-world violations without blocking users
+2. Monitor `csp-report` intake for one release cycle; resolve any Next.js internals that still emit inline styles without the nonce (Next 15 handles most cases via `next/script` and the built-in style loader, so very few exceptions are expected)
+3. Next release: remove `'unsafe-inline'` from the production header; keep the report-uri live so new regressions are visible
 
 ### 5. Performance Check
 

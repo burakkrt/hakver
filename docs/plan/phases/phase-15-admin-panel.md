@@ -110,12 +110,31 @@ Basic statistics overview:
 - Recent activity (last 10 activity log entries)
 - New users today/this week
 
-**API endpoints needed** (add to backend if not existing):
+#### 4.1. Backend: `/admin/stats` Endpoint
+
+The dashboard data is served by a new backend endpoint owned by this phase. Even though Phase 15 is frontend-heavy, the admin-only API surface that backs it lives here so the feature ships as one coherent unit.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | /admin/stats | Admin | Dashboard statistics |
+| GET | /admin/stats | Admin + RequirePermissions(`system:manage`) | Dashboard aggregate counters |
 
-Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL: 5 minutes).
+**Response schema** (new in `packages/shared/src/schemas/admin.ts`):
+
+```
+AdminStatsResponseSchema = {
+  users:     { total: number, activeLast30Days: number, newToday: number, newThisWeek: number },
+  topics:    { total: number, activeLast30Days: number, newToday: number },
+  comments:  { total: number, newToday: number },
+  reports:   { pending: number, resolvedThisWeek: number, dismissedThisWeek: number },
+  recentActivity: ActivityLogSummarySchema[]  // last 10 entries (action, actor username, timestamp, targetType)
+}
+```
+
+**Implementation notes:**
+- Each counter is a single `COUNT` or date-bounded `COUNT` query; the five-minute Redis cache (`@CacheTTL(300)`, key `admin:stats`) absorbs dashboard refreshes without hitting the database on every poll
+- Recent activity pulls the latest 10 rows from `ActivityLog`, joined with `User` for the actor username
+- Cache invalidation is TTL-based only — admins who need up-to-the-second figures can trigger a stats refresh via a "Yenile" button in the UI, which bypasses the cache with a `?nocache=1` query parameter accepted by this endpoint (still admin-guarded, rate-limited to 1 request per 10 seconds per admin)
+- Response DTO construction is handled in the service layer; no Prisma types leak
 
 ### 5. Report Management (`/reports`)
 
@@ -194,9 +213,10 @@ Stats endpoint returns aggregated counts from the database. Cached in Redis (TTL
 
 **Flow:**
 1. Replace the user's role assignment (`UserRole` table — remove old role, insert new role)
-2. Invalidate all active sessions of the target user (forces re-login with new permissions, avoids stale JWT)
-3. Write `ActivityLog` entry: `action: "user:role-change"`, `metadata: { previousRole, newRole, reason }`
-4. Response: 200 with the updated user summary
+2. **Restriction sweep on authority promotion:** when the new role is an authority role (MODERATOR, ADMIN, or any future role that carries authority permissions), delete every row from `UserRestriction` where `userId` equals the target user. An authority-carrying account must not be blocked from the same actions it is now expected to supervise. The sweep runs inside the same transaction as the role swap so the role and restriction states always stay consistent. When the new role is USER, existing restrictions are left untouched because a demoted user is still subject to community rules. Note: gaining an authority role grants only the permissions bound to that specific role — it does not cascade permissions from other authority roles. For example, promoting a user to MODERATOR unlocks moderator permissions only; it does not grant admin-only actions even though both are authority roles. Permission enforcement remains the responsibility of the PermissionGuard against each role's permission bindings
+3. Invalidate all active sessions of the target user (forces re-login with new permissions, avoids stale JWT)
+4. Write `ActivityLog` entry: `action: "user:role-change"`, `metadata: { previousRole, newRole, reason, clearedRestrictionIds }`. The `clearedRestrictionIds` field lists any `UserRestriction` records removed by the authority-promotion sweep, giving the audit trail a complete picture of what changed
+5. Response: 200 with the updated user summary
 
 Error code for missing reason: `{ code: "MODERATION_REASON_REQUIRED", message: "Rol değişikliği için sebep girilmelidir" }`
 
@@ -239,6 +259,32 @@ Error code for missing reason: `{ code: "MODERATION_REASON_REQUIRED", message: "
 - Manage restriction categories (CRUD)
 - Manage restriction reasons per category (CRUD)
 - Toggle isActive on categories and reasons
+
+### 12. Broadcast Notification Composer (`/broadcasts`) — Admin Only
+
+Surface for the `POST /admin/notifications/broadcast` endpoint defined in Phase 10 Section 3.1.
+
+**Compose screen:**
+- Title input (Turkish, 5–120 characters) — example placeholder "Bakım Duyurusu"
+- Body textarea (Turkish, 10–1000 characters, character counter) — supports plain text; no rich formatting at MVP
+- Audience selector (radio group):
+  - **"Tüm kullanıcılar"** (`scope: "ALL"`) — default
+  - **"Seçilen kullanıcılar"** (`scope: "SELECTED_USERS"`) — opens a multi-select user search (username autocomplete, max 5000 entries, visual chip list)
+  - **"Role göre"** (`scope: "ROLE"`) — dropdown of available roles (USER / MODERATOR / ADMIN)
+- Reason textarea (Turkish, 5–500 characters) — required audit-trail field "Bu duyurunun nedeni"
+- Estimated-recipient count displayed live (calls a lightweight `GET /admin/notifications/broadcast/preview` endpoint as the audience changes)
+- Action buttons: "İptal" and "Gönder". "Gönder" opens a confirmation dialog that repeats the title, body, audience description, and recipient count before calling the broadcast endpoint
+
+**History screen:**
+- Table view of past broadcasts: title, audience scope, recipient count, broadcaster, date, delivered count
+- Row click expands the full body + reason and shows the BullMQ job status (completed / failed) so admins can verify delivery
+- Filter: date range, broadcaster, scope
+
+**Security / UX notes:**
+- Available only to ADMIN role (not MODERATOR). The sidebar entry is hidden for moderators
+- Submit button is disabled unless every required field passes validation client-side; the server-side Zod refinement is authoritative
+- On `429 RATE_LIMIT_EXCEEDED` the UI surfaces the formatted Turkish message (Phase 10 / `.claude/rules/security.md`) and starts a countdown on the button
+- A visible "Yönetici Duyurusu" tag appears in the preview so admins understand that the message will be clearly marked as an admin broadcast on the recipient's notification list
 
 ## Security Checklist
 - [ ] Admin panel only accessible to ADMIN and MODERATOR roles

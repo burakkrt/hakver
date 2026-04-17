@@ -18,6 +18,7 @@
 
 ## ORM Type Isolation
 - ORM (Prisma) types never leak to frontend — convert to shared DTO schemas at the service layer
+- Every list / detail endpoint must declare an explicit Prisma `select` (or tightly scoped `include`) object; implicit "return all columns" queries are rejected in code review to keep payloads lean and prevent accidental PII leaks. Reusable selects live under `apps/api/src/common/prisma-selects/` (detailed guidance in `.claude/rules/backend.md`)
 
 ## API Response Standard
 - All API responses should be consistent, predictable, and follow REST standards. Error responses should include error codes from the shared package and Turkish user-facing messages. Pagination meta should be considered for list endpoints.

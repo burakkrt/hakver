@@ -196,6 +196,7 @@ Sections:
   - **"Yorumunuz öne çıkarıldığında"** (`COMMENT_HIGHLIGHTED`) — toggle, default on
   - **"Sizi biri etiketlediğinde"** (`MENTIONED`) — **non-toggleable** (disabled toggle with helper text "Kişisel sinyaller her zaman açıktır")
   - **"İlgilendiğiniz konuya güncelleme eklendiğinde"** (`TOPIC_UPDATED`) — **non-toggleable** (disabled toggle, same helper text)
+  - **"Yönetici duyuruları"** (`ADMIN_BROADCAST`) — toggle, default on (users may mute admin broadcasts per preference; see Phase 10 Section 3.1)
 - Changes save immediately using an optimistic update; on error the toggle reverts and an error toast is shown
 - 429 / 403 responses surface the formatted Turkish message defined in `.claude/rules/security.md`
 
@@ -213,10 +214,10 @@ Sections:
 - `/terms-of-service` → Kullanım Koşulları full text
 - `/privacy-policy` → Gizlilik Politikası full text
 - `/community-guidelines` → Topluluk Kuralları full text
-- `/reset-password` → Two-step password reset page:
-  - **Step 1 (no token in URL):** Email input form → "Şifre sıfırlama bağlantısı gönder" button. On success: "Email adresinize şifre sıfırlama bağlantısı gönderildi" message.
-  - **Step 2 (token in URL query `?token=xxx`):** New password form (password + confirm password). On success: "Şifreniz başarıyla değiştirildi" + redirect to login page.
-  - The page checks for `token` query parameter to decide which step to show.
+- `/reset-password` → Two-step password reset page (token travels in the URL fragment, never the query string; see Phase 3 Section 11):
+  - **Step 1 (no fragment in URL):** Email input form → "Şifre sıfırlama bağlantısı gönder" button. On success: "Email adresinize şifre sıfırlama bağlantısı gönderildi" message.
+  - **Step 2 (fragment `#token=xxx`):** The page reads `window.location.hash`, strips it via `history.replaceState` so the token disappears from the address bar and browser history, then shows the new-password form (password + confirm password). Submit calls `POST /auth/reset-password` with the token in the JSON body. On success: "Şifreniz başarıyla değiştirildi" + redirect to `/login`. On `AUTH_RESET_TOKEN_INVALID`: dedicated "Bağlantının süresi dolmuş" screen (Turkish body: "Sıfırlama bağlantınızın süresi dolmuş veya daha önce kullanılmış. Lütfen yeni bir bağlantı isteyin.") with a single CTA "Yeni bağlantı al" that re-opens the Step 1 form.
+  - Page chooses the step based on the presence of a `token` key in `window.location.hash`. The old `?token=` query parameter is **not** accepted — if a user or bookmark attempts that form the page renders the "Bağlantının süresi dolmuş" screen and forces them back through Step 1.
 
 Text content is fetched from the database (`ConsentVersion` table). Rendered with Server Component via SSR.
 

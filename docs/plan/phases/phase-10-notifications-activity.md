@@ -28,14 +28,22 @@ notification/
 
 In `packages/shared/src/schemas/notification.ts`:
 
-**NotificationResponseSchema** (response DTO):
+**NotificationResponseSchema** (response DTO — single canonical shape for every notification, single-actor and aggregated):
 - id: UUID
 - type: NotificationType enum
 - isRead: boolean
 - createdAt: ISO date string
-- actor: `UserPublicCardSchema | AnonymousCardSchema` (card shape — notification actors are never rendered with firstName/lastName)
+- updatedAt: ISO date string (latest actor-append time; equals `createdAt` when `aggregatedCount === 1`)
+- aggregatedCount: integer ≥ 1 (1 for single-actor notifications, >1 for aggregated)
+- actors: `UserPublicCardSchema[]` (length 1..3). Always an array; the single-actor case carries a one-element array. The last three distinct actors sit here in most-recent-first order. Elements are card-shape only — firstName and lastName are never included
+- isAnonymousAggregate: boolean (true when every actor rolled into the notification is an anonymous author; in that case `actors` is returned as an empty array, see aggregation rules in Section 3 step 9)
 - reference: `{ type: ReferenceType, id: UUID, title?: string }`
-- message: string (Turkish, user-facing — generated from type + actor)
+- isStale: boolean (true when the referenced target is soft-deleted; see Section 5 L-4)
+- message: string (Turkish, user-facing — generated from type + actors array size + anonymity flags). For `ADMIN_BROADCAST` this field is left empty; the frontend renders `title` and `body` instead
+- title: string | null (populated only for `ADMIN_BROADCAST`; see Section 3.1)
+- body: string | null (populated only for `ADMIN_BROADCAST`; max 1000 characters)
+
+> The singular `actor` field that earlier drafts described is deliberately absent. Frontend and backend both read and write `actors` only, which keeps client rendering logic uniform for single-actor and aggregated cards.
 
 ### 2. API Endpoints
 
@@ -45,8 +53,10 @@ In `packages/shared/src/schemas/notification.ts`:
 | GET | /notifications/unread-count | JWT | Unread notification count |
 | PATCH | /notifications/:id/read | JWT | Mark notification as read |
 | PATCH | /notifications/read-all | JWT | Mark all as read |
-| POST | /topics/:topicId/mute | JWT | Mute topic notifications |
+| POST | /topics/:topicId/mute | JWT | Mute topic notifications (author/subscriber opt-out for this specific topic) |
 | DELETE | /topics/:topicId/mute | JWT | Unmute topic notifications |
+| POST | /topics/:topicId/subscribe | JWT | Opt in to `TOPIC_UPDATED` notifications for this topic (non-authors only; authors are subscribed implicitly) |
+| DELETE | /topics/:topicId/subscribe | JWT | Opt out of `TOPIC_UPDATED` notifications for this topic |
 | GET | /users/me/notification-preferences | JWT | All notification types + their `enabled` status (missing rows default to enabled) |
 | PATCH | /users/me/notification-preferences | JWT | Update the `enabled` flag for a single type. Body: `{ type: NotificationType, enabled: boolean }`. Sending `MENTIONED` or `TOPIC_UPDATED` returns 400 with message "Bu bildirim türü devre dışı bırakılamaz" (non-toggleable personal signals) |
 
@@ -59,14 +69,57 @@ In `packages/shared/src/schemas/notification.ts`:
 3. **Block check:** skip if a `UserBlock` row exists between recipient and actor in **either direction**
 4. **Per-type preference check:** skip if `UserNotificationPreference(userId, type)` exists with `enabled=false`. Absent row means enabled by default. `MENTIONED` and `TOPIC_UPDATED` are non-toggleable on the backend — the preference check is bypassed for these two types
 5. **Mute check** (topic-based): skip if `NotificationMute(userId, topicId)` exists for the referenced topic. **Exception: `MENTIONED` bypasses this check** — @mention is a personal signal and punches through topic mute
-6. **Actor-target idempotency** (L-5): applies only to `TOPIC_VOTED` and `COMMENT_LIKED`. If the same `(userId=recipient, type, referenceId, actorId)` quadruple already has a record (read or unread) within the last 24 hours, **do not create a new record**; instead bump the existing record's `updatedAt`. This suppresses repeats across vote-withdraw-revote or like-unlike-like cycles
+6. **Actor-target idempotency** (L-5): applies to `TOPIC_VOTED`, `COMMENT_LIKED`, `TOPIC_COMMENTED`, and `COMMENT_REPLIED`. If the same `(userId=recipient, type, referenceId, actorId)` quadruple already has a record (read or unread) within the last 24 hours, **do not create a new record**; instead bump the existing record's `updatedAt`. This suppresses repeats across vote-withdraw-revote, like-unlike-like, and comment/reply delete-and-repost cycles (Phase 7 allows rapid soft-delete + recreate, which without this guard would spam the topic author with repeated notifications for the same adversary). Edge cases:
+   - **Comment was soft-deleted then recreated:** the second `TOPIC_COMMENTED` within 24h matches the first via `referenceId = topicId` and `actorId = same user`; the existing (possibly read) notification is not duplicated
+   - **Comment was soft-deleted then *edited* (author edits the original, not re-create):** no new notification fires — edit is not a trigger in Phase 7
+   - **Two distinct comments from the same actor on the same topic within 24h:** still a single notification record (the semantic is "user X is discussing your topic", one card is enough). The `aggregatedCount` / `NotificationActor` row counts stay at 1 since the same actor is not appended twice (the `@@unique([notificationId, actorId])` constraint would reject a duplicate actor row anyway)
+   - **Different parent comments from the same actor for `COMMENT_REPLIED`:** idempotency keys on `referenceId = parentCommentId`, so replies under different parents each produce their own notification to the respective parent author
 7. **Aggregation check** (L-1): if `type ∈ { TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED }`, look for an existing record with the same `(userId, type, referenceType, referenceId)`, `isRead=false`, and `updatedAt >= now() - 15min`:
    - **Found:** append the new actor to `NotificationActor` (the `@@unique` constraint drops duplicate actor rows), `aggregatedCount += 1`, set `actorId` to the new actor, bump `updatedAt = now()`. Emit a `notification:updated` WebSocket event so the client refreshes the existing card in place (L-8: no new card inserted)
    - **Not found:** fall through to step 8 and create a fresh record
 8. **Create a new record:** insert `Notification` (`aggregatedCount=1`, first actor row in `NotificationActor`). Emit `notification:new` WebSocket event
 9. **Anonymous actor** (L-9): when the actor acts anonymously (anonymous topic/comment author), aggregation is **mandatory** — a single anonymous actor never renders as a standalone identity card. Even one anonymous actor folds into the aggregated shape; the message format is always "Bir kullanıcı konunuza oy verdi" (single) or "N kullanıcı konunuza oy verdi" (multi), never the real anonymous display name like "Anonim Penguen #4521". This rule does **not** apply to `MENTIONED` (mention targets a specific user; the anonymous card is shown on that user's notification because the timing correlation risk is an accepted trade-off for explicit mentions). **Security note:** on `MENTIONED` notifications the anonymous actor's display name (e.g., "Anonim Penguen #4521") is returned only to the mentioned user; no other API response pairs this name with the comment. The frontend scrolls from the mention notification to the comment where the anonymous card is still rendered as anonymous — the real identity never leaks
 
-**Actor hydration** (L-6): the `actor` field in notification listings and WebSocket event payloads is **always** hydrated via `UserPublicCardSchema`. For soft-deleted actors the schema rule returns `isDeletedAuthor: true` and masks the card fields ("Silinmiş Kullanıcı" label, default "silinmis" avatar, rank omitted, `totalXp: 0`). Anonymous actors use `AnonymousCardSchema` (`displayName` + `iconType`). No code path leaks raw username / full name to the frontend.
+**Actor hydration** (L-6): each element of the `actors` array in notification listings and WebSocket event payloads is **always** hydrated via `UserPublicCardSchema`. For soft-deleted actors the schema rule returns `isDeletedAuthor: true` and masks the card fields ("Silinmiş Kullanıcı" label, default "silinmis" avatar, rank omitted, `totalXp: 0`). Anonymous actors never appear hydrated in the array — when the actor is anonymous the record is flagged with `isAnonymousAggregate: true` and `actors` returns `[]` (see Section 5 and the L-9 security rule below). No code path leaks raw username / full name to the frontend.
+
+### 3.1. Admin Broadcast Notification
+
+Users with the `system:manage` permission (ADMIN role at MVP; future authority roles may also gain it) can dispatch an `ADMIN_BROADCAST` notification to an explicit recipient set. This is the MVP mechanism for service announcements ("Bakım penceresi gece 02:00–03:00 arasında", "Yeni topluluk kuralı yayınlandı").
+
+**Endpoint:** `POST /admin/notifications/broadcast` (ADMIN only, requires `system:manage` permission).
+
+**Request schema** (new in `packages/shared/src/schemas/admin.ts`):
+
+```
+AdminBroadcastRequestSchema = {
+  title: string          // 5..120 chars, HTML-stripped, Turkish user-facing
+  body: string           // 10..1000 chars, HTML-stripped, Turkish user-facing
+  audience: {
+    scope: "ALL" | "SELECTED_USERS" | "ROLE"
+    userIds?: UUID[]     // required when scope = SELECTED_USERS (max 5000 ids per request)
+    roleName?: string    // required when scope = ROLE (e.g., "MODERATOR")
+  }
+  acknowledgementReason: string  // 5..500 chars — audit trail, stored in ActivityLog
+}
+```
+
+**Flow:**
+1. Validate request. `audience.scope` and the accompanying field must be consistent (Zod refinement returns 400 `{ code: "VALIDATION_INVALID_INPUT" }` on mismatch)
+2. Build the recipient id list from the scope. Exclude the broadcasting admin themselves, soft-deleted accounts, and — for `SELECTED_USERS` — deduplicate and drop ids that do not exist
+3. Enqueue a BullMQ `admin-broadcast-fanout` job carrying `{ actorId, title, body, recipientBatch }` in 500-recipient chunks, mirroring the Phase 10 `TOPIC_UPDATED` fan-out worker pattern. This keeps individual transactions bounded and isolates batch failures
+4. Each worker inserts `Notification` rows with `type: ADMIN_BROADCAST`, `actorId: broadcaster`, `referenceType: USER`, `referenceId: broadcaster`, the Turkish `title` and `body` fields populated, and `aggregatedCount: 1`. Aggregation, actor-target idempotency, and topic-mute checks **do not apply** — broadcasts are always delivered in full, once per recipient
+5. Per-type preference check still applies: `UserNotificationPreference(userId, type=ADMIN_BROADCAST)` with `enabled=false` suppresses delivery. The preference defaults to `true` (users receive broadcasts unless they explicitly disable them) and `ADMIN_BROADCAST` is **toggleable** from the notification settings UI, unlike `MENTIONED` and `TOPIC_UPDATED`
+6. The service writes an ActivityLog entry `action: "admin:notifications-broadcast"` carrying `{ broadcasterId, audienceScope, recipientCount, title, acknowledgementReason }`. This is a mandatory audit step — the reason field exists precisely for accountability
+7. WebSocket delivery follows the standard `notification:new` event so online recipients see the card appear immediately
+8. Response: 202 Accepted with `{ jobId, estimatedRecipients }`. Actual delivery happens asynchronously; the admin UI polls the job status endpoint (`GET /admin/notifications/broadcasts/:jobId`) to show progress
+
+**Error handling:**
+- `403 FORBIDDEN` when the caller lacks `system:manage` permission (ADMIN-only at MVP)
+- `400 MODERATION_REASON_REQUIRED` when `acknowledgementReason` is absent or too short (reuses the existing moderator-action reason pattern)
+- `400 VALIDATION_INVALID_INPUT` for schema issues
+- `429 RATE_LIMIT_EXCEEDED` when the admin exceeds 5 broadcasts per hour per admin (prevents abuse). 429 message follows the Turkish format described in `.claude/rules/security.md`
+
+**Message rendering:** The frontend renders `ADMIN_BROADCAST` notifications with a distinct visual treatment — primary-tone accent bar plus a "Yönetici Duyurusu" chip — so they are never confused with engagement notifications. The `message` field is ignored for this type; the UI reads `title` and `body` directly from the notification payload.
 
 ### 4. Notification Triggers
 
@@ -81,29 +134,40 @@ Add notification hooks to existing modules:
 - When a comment is posted → `TOPIC_COMMENTED` notification to topic owner. Aggregation applies
 - When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner. Aggregation applies
 - When a like is given → `COMMENT_LIKED` notification to comment owner. Aggregation + actor-target idempotency apply (like-unlike-like cycle resolves to a single notification)
-- When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card for anonymous comments). **Aggregation does not apply** — each mention is a single notification. **Topic mute exception:** mention notifications are emitted even on muted topics (L-3)
+- When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. **Aggregation does not apply** — each mention is a single notification. **Topic mute exception:** mention notifications are emitted even on muted topics (L-3). **Anonymous actor privacy rule (updated):** when the commenter is anonymous, the notification is persisted with `isAnonymousAggregate: true` and an empty `actors` array. The rendered Turkish message becomes `"Bir kullanıcı sizi bir yorumda etiketledi"` — the anonymous display name (`"Anonim Penguen #4521"`) is never surfaced on this notification. The mention recipient still clicks through to the comment, where the anonymous card remains anonymous; they never get an extra "which anonymous identity mentioned me" hint that could help triangulate the real author on a topic the user is also watching
 - When the topic author highlights a comment (`PATCH /comments/:id/highlight`) → `COMMENT_HIGHLIGHTED` notification to the comment author. Aggregation does not apply. Skipped when the topic author highlights their own comment (self-notification prevention). Removing the highlight does not trigger a notification. Idempotent PATCH (re-highlighting an already-highlighted comment) does not produce a duplicate notification
 
 **Topic Module:**
 - When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notifications are fanned out asynchronously via BullMQ. Clearing the update note does not trigger a notification.
 
-**Fan-out recipient rules:**
-- Include: users who voted on the topic (Vote.userId) ∪ users who commented on the topic (Comment.authorId)
-- Exclude the topic author themselves
-- Exclude users whose `User.deletedAt IS NOT NULL` (soft-deleted accounts never receive notifications)
-- Exclude users who muted the topic (NotificationMute row for this topic)
-- Exclude any user who has a block relationship with the author in **either direction** — that is, if `UserBlock(blockerId=recipient, blockedId=author)` OR `UserBlock(blockerId=author, blockedId=recipient)` exists, skip the recipient. Hakver's block policy is symmetric; one-way block counts as both-way here
-- Anonymous comments still count toward the recipient list (the anonymous commenter still gets notified about updates to a topic they engaged with)
+**Default-off subscription policy (authoritative):**
+
+Voting on or commenting on a topic does **not** subscribe a user to that topic's update notifications. The platform-wide default is: non-author users receive no `TOPIC_UPDATED` notification unless they explicitly subscribed via the topic detail page. This keeps notification volume predictable for popular threads — a topic with thousands of voters does not inundate all of them every time the author edits the note.
+
+- Authors are always considered subscribed to their own topics (implicit; no `TopicSubscription` row needed). Self-notification prevention still filters them out of update-note fan-out because they are the actor
+- Non-author users opt in by calling `POST /topics/:topicId/subscribe` (Phase 10 Section 7 endpoints), which creates a `TopicSubscription` row. They can opt out via `DELETE /topics/:topicId/subscribe`
+- `NotificationMute` remains available for authors who want to silence notifications about activity on their own topics (e.g., voting/commenting noise); it is **not** the primary opt-out path for TOPIC_UPDATED because non-authors are opt-in by default
+- Engagement-type notifications targeted at the topic author (`TOPIC_VOTED`, `TOPIC_COMMENTED`) stay default-on for the author — they still learn when their topic receives votes and comments. The author can disable those via the per-type toggle in notification settings (Phase 12)
+
+**Fan-out recipient rules (`TOPIC_UPDATED`):**
+- Include: users with a `TopicSubscription` row for this topic
+- Exclude the topic author (they are the actor who triggered the update)
+- Exclude users whose `User.deletedAt IS NOT NULL`
+- Exclude users who muted the topic (`NotificationMute` row) — mute wins over subscription, so a subscriber who later mutes stops receiving updates without needing to unsubscribe
+- Exclude any user under a symmetric block with the author (see Phase 9 `BlockService.isBlocked`)
+- Anonymous commenters who explicitly subscribed still count — the anonymity applies only to how they appear in the discussion, not to whether they receive notifications they actively opted into
 
 **Fan-out execution (BullMQ):**
-- The fan-out producer runs the single recipient query (DISTINCT userId across Vote + Comment, with all filters applied in SQL) and splits the result into **batches of 500 recipients**
+- The fan-out producer runs the single recipient query (`SELECT userId FROM TopicSubscription WHERE topicId = :topicId` joined with the exclusion filters above) and splits the result into **batches of 500 recipients**
 - Each batch is enqueued as its own BullMQ job (`topic-updated-fanout` queue). Jobs run in parallel with the worker concurrency limit
 - Each job inserts its batch of `Notification` rows in a single `createMany` and pushes WebSocket events to each online recipient
 - Failed jobs use the standard retry policy (3 attempts, exponential backoff) and fall back to the dead-letter queue
-- This chunking keeps individual transactions bounded (no 10k-row inserts), gives isolation between batches (one job failure doesn't block others), and lets the queue worker concurrency dictate throughput
+- Chunking keeps individual transactions bounded, isolates batch failures, and lets the worker concurrency dictate throughput
 
-**Deduplication:**
-- If the author replaces the note while a previous `TOPIC_UPDATED` notification from the same topic is still unread by the recipient, update the existing notification's `createdAt` and keep it unread instead of creating a duplicate record. This prevents notification spam when the author iterates on the text
+**Deduplication (DB-enforced):**
+- A partial unique index on `Notification` guarantees at most one unread `TOPIC_UPDATED` per recipient per topic: `UNIQUE (userId, referenceId, type) WHERE type = 'TOPIC_UPDATED' AND isRead = false`. This is a raw SQL migration (Prisma declarative syntax does not yet cover partial indexes in all versions; `prisma migrate` supports them through `@@map` + SQL). The index turns a duplicate insert into a caught exception that the worker converts into an `updatedAt` bump on the existing row
+- **Producer-side debounce:** when the author issues a second `PATCH /topics/:id/update-note` within 10 seconds of the previous one, the update-note service replaces the in-flight fan-out job instead of enqueuing a new one. Implementation: each fan-out job carries a `jobId` derived from `topic-updated:{topicId}`; enqueue with `removeOnComplete` + `removeOnFail` and BullMQ's `upsert` / deterministic job id so a second enqueue inside the debounce window replaces the pending job. The final job wins
+- Combined, the partial index is the safety net (catches race conditions across workers) and the debounce is the efficiency layer (avoids wasted work when the author edits quickly)
 
 ### 5. Notification Listing
 
@@ -156,7 +220,9 @@ Add notification hooks to existing modules:
   "message": "Bir kullanıcı konunuza yorum yaptı"
 }
 ```
-When `aggregatedCount > 1` the message becomes "N kullanıcı konunuza yorum yaptı". This prevents leakage of a lone anonymous actor's display name (e.g., "Anonim Penguen #4521") through the notification channel — the anonymous card on the topic detail page still protects identity. **Exception: `MENTIONED`** — mention targets a specific person, so the anonymous card is shown inside the mention notification (accepted trade-off).
+When `aggregatedCount > 1` the message becomes "N kullanıcı konunuza yorum yaptı". This prevents leakage of a lone anonymous actor's display name (e.g., "Anonim Penguen #4521") through the notification channel — the anonymous card on the topic detail page still protects identity.
+
+**Anonymous `MENTIONED` also hides the display name** (updated rule): when the mention comes from an anonymous commenter, the frontend renders `"Bir kullanıcı sizi bir yorumda etiketledi"` instead of prefixing the anonymous display name. The earlier draft's "accepted trade-off" exception is retired — there is no product gain in revealing which anonymous identity mentioned the user; the recipient can still click through to the comment where the anonymous card stays intact, and removing the name from the notification closes the remaining triangulation vector on topics the mention recipient is also browsing.
 
 **Notification messages** (Turkish user-facing strings):
 
@@ -189,7 +255,9 @@ In addition to the gateway set up in Phase 6:
 - Server → Client: `notification:new` → notification object
 - Server → Client: `notification:unread-count` → `{ count: number }`
 
-### 7. Topic-Based Muting
+### 7. Topic-Based Muting and Subscription
+
+**Muting** silences every notification the current user would otherwise receive about a specific topic, regardless of why they would receive it. It is the catch-all opt-out path — useful for authors who want to ignore a noisy topic they created, or for subscribers who no longer want the updates.
 
 `POST /topics/:topicId/mute`:
 1. Create `NotificationMute` record (`userId, topicId`)
@@ -199,14 +267,30 @@ In addition to the gateway set up in Phase 6:
 1. Delete record
 2. If not found → 404
 
-Mute status is returned as a flag in the topic detail response:
+**Subscription** (non-authors only) is the opt-in path for `TOPIC_UPDATED`. Without a subscription, a user who voted or commented on a topic receives no update notifications by default.
+
+`POST /topics/:topicId/subscribe`:
+1. Verify the caller is not the topic author (authors are implicitly subscribed; a self-subscribe attempt returns 400 `{ code: "VALIDATION_INVALID_INPUT", message: "Kendi konunuza abone olamazsınız" }`)
+2. Create `TopicSubscription` row (`userId, topicId`)
+3. Unique constraint → already subscribed → 409
+4. Response: 201
+
+`DELETE /topics/:topicId/subscribe`:
+1. Delete the `TopicSubscription` row
+2. If not found → 404
+3. Response: 200
+
+Both mute and subscription states are returned as flags on the topic detail response:
 ```json
 {
   "id": "...",
   "title": "...",
-  "isMuted": true  // if authenticated and mute record exists
+  "isMuted": true,       // if authenticated and NotificationMute row exists
+  "isSubscribed": false  // if authenticated and non-author; for the author this field is always true
 }
 ```
+
+**Interaction between mute and subscription:** Mute wins. A user who is subscribed AND has muted the topic receives no notification — they do not need to unsubscribe first. This keeps the opt-out path predictable when the user just wants the notifications to stop.
 
 ### 8. Activity Log Module
 
@@ -248,7 +332,18 @@ interface ActivityLogData {
 - Block/unblock
 - Login
 
-**IP and User-Agent:** Taken from the request via `req.ip` and `req.headers['user-agent']`. Can be automatically added via NestJS interceptor.
+**IP and User-Agent:** Taken from the request via `req.ip` and `req.headers['user-agent']`. Added automatically via the post-response interceptor described below.
+
+**Writing strategy — post-response interceptor (MVP):**
+
+Activity log writes run **after the HTTP response has been sent**, never inside the hot path's business transaction. This keeps the user-facing latency untouched by the extra insert while still keeping the log in the same NestJS request context.
+
+- Implementation: a `ActivityLogInterceptor` (NestJS) observes successful controller handlers that opt-in (decorator `@LogActivity('action-name')` or an ordered interceptor list). After the response stream completes it enqueues the log payload through the `ActivityLogService.log()` method, which writes to the `ActivityLog` table asynchronously. The write is fire-and-forget from the interceptor's perspective
+- The service uses a short in-memory buffer flushed every 500 ms (or on graceful shutdown) to coalesce multiple inserts into a single `createMany`. This keeps per-action overhead low without needing BullMQ for the MVP
+- If activity-log write volume grows beyond what the in-memory buffer can handle, the follow-up is to migrate behind a BullMQ queue (same pattern as the email / TOPIC_UPDATED fan-out queues); this upgrade is tracked in `docs/post-mvp.md` if and when it becomes necessary
+- Failures in the activity-log write path are logged to Pino but never surfaced to the client — the user's action has already succeeded by the time the interceptor runs
+
+**Actor-self notification exception clarification (cross-reference to E3 behaviour):** the "Self-notification prevention" rule in Section 3 step 2 already ensures the voter/commenter does not receive a notification about their own action — only the *counterpart* (topic author for TOPIC_VOTED / TOPIC_COMMENTED, comment author for COMMENT_LIKED / COMMENT_REPLIED) receives one. Both parties still earn XP. Authors who find the notifications noisy can disable `TOPIC_VOTED` / `TOPIC_COMMENTED` individually from the notification settings page (Phase 12), because the per-type toggle is "on" by default.
 
 ### 9.1. Data Retention Policy
 
@@ -268,10 +363,16 @@ The `action` field in the `ActivityLog` table is used to classify log type. Secu
 - Notifications older than 90 days are automatically deleted by the same cron job
 - This prevents the `Notification` table from growing unboundedly
 
+**XpLog hot/cold archival** (daily at 04:15 AM UTC):
+- Move rows from `XpLog` whose `createdAt < now() - interval '12 months'` into `XpLogArchive`
+- Execute in batches of 5000 inside short transactions (`INSERT INTO XpLogArchive SELECT ... LIMIT 5000; DELETE FROM XpLog WHERE ...`) so the cron stays bounded even on large migrations
+- Archive schema is identical to the hot schema so the move is a straight copy; no field mapping required
+- Log the count of rows archived per run for observability
+
 **XP reconciliation** (daily at 04:30 AM UTC):
-- Compare `User.totalXp` with `SUM(XpLog.points)` for all active users
+- Compare `User.totalXp` with `SUM(XpLog.points) + SUM(XpLogArchive.points)` for all active users (the archive sum keeps reconciliation correct after archival runs)
 - If a drift is detected (values don't match):
-  1. Correct `User.totalXp` to match the actual `SUM(XpLog.points)` (minimum 0)
+  1. Correct `User.totalXp` to match the actual sum (minimum 0)
   2. Run `checkAndUpdateRank()` for affected users
   3. Create an ActivityLog entry with action `xp:reconciliation`, metadata including `{ userId, previousXp, correctedXp, drift }`
 - Log the total number of reconciled users for monitoring

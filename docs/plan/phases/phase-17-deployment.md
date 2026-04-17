@@ -54,7 +54,7 @@ CMD ["node", "dist/main"]
    - `PORT` — Railway auto-assigns or 3001
    - `NODE_ENV=production`
 6. Deploy trigger: main branch push
-7. Health check: `GET /api/v1/health`
+7. Health check: Railway readiness probe → `GET /api/v1/health/ready` (returns 503 when DB or Redis are unreachable; Railway pulls the container from the LB pool). Liveness probe → `GET /api/v1/health/live` (restart the container only on full process failure)
 
 ### 3. Prisma Migration (Production)
 
@@ -179,7 +179,9 @@ The following scheduled jobs run in the backend (`@nestjs/schedule`):
 | Activity Log Cleanup | Daily 03:00 AM | Delete regular activity logs > 90 days, security logs > 1 year |
 | Notification Cleanup | Daily 03:30 AM | Delete notifications > 90 days |
 | Expired Restriction Cleanup | Daily 04:00 AM | Clean up expired restriction records (optional, soft cleanup) |
-| XP Reconciliation | Daily 04:30 AM | Compare User.totalXp with SUM(XpLog.points), fix drift, log corrections |
+| XpLog Hot/Cold Archival | Daily 04:15 AM | Move rows older than 12 months from XpLog into XpLogArchive |
+| XP Reconciliation | Daily 04:30 AM | Compare User.totalXp with SUM(XpLog.points) + SUM(XpLogArchive.points), fix drift, log corrections |
+| Trending Score Recompute | Every 5 minutes | Recompute `Topic.trendingScore` for topics created within the last 7 days; older topics keep score 0. See Phase 5 `sort=trending` and `sort=controversial` behaviour |
 
 These are configured in a `ScheduleModule` within the backend. Ensure Railway keeps at least one instance running for cron jobs to execute.
 
@@ -189,8 +191,10 @@ Post-deployment manual checklist:
 
 ```bash
 # 1. Backend health
-curl https://[backend-url]/api/v1/health
-# → { "status": "ok" }
+curl https://[backend-url]/api/v1/health/live
+# → { "status": "ok", "timestamp": "..." }
+curl https://[backend-url]/api/v1/health/ready
+# → { "status": "ok", "checks": { "database": "up", "redis": "up" } }
 
 # 2. Frontend
 # https://[frontend-url] → page loads
@@ -316,7 +320,7 @@ GitHub repository settings:
 ```
 
 ## Completion Criteria
-- [ ] Backend running on Railway, health endpoint returns 200
+- [ ] Backend running on Railway, `/api/v1/health/live` returns 200 and `/api/v1/health/ready` returns 200 with `database` and `redis` both `"up"`
 - [ ] Frontend running on Vercel, page loads
 - [ ] Admin panel running on Vercel, accessible to admin/moderator only
 - [ ] Production database migrated and seed data loaded

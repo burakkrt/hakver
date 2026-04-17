@@ -80,12 +80,13 @@ Add the following shadcn/ui components:
 
 **`src/lib/api.ts`**:
 - Base URL: `NEXT_PUBLIC_API_URL`
-- Axios instance (or fetch wrapper)
-- Request interceptor: `Authorization: Bearer {accessToken}` header
+- Axios instance (or fetch wrapper) configured with `withCredentials: true` / `credentials: "include"` so the backend-issued refresh cookie is attached on every request to the auth endpoints
+- Request interceptor: attaches `Authorization: Bearer {accessToken}` header from the in-memory auth store
 - Response interceptor:
-  - 401 → attempt refresh with refresh token → if successful, retry original request
-  - Refresh also 401 → logout, redirect to login page
-- Error format standardization
+  - `401 AUTH_TOKEN_EXPIRED` → call `POST /auth/refresh` (cookie is sent automatically); on success, store the new access token in memory and retry the original request once
+  - Refresh itself returns `401` → `clearAuth()`, redirect to `/login` (the refresh cookie has already been invalidated by the backend; no client-side cookie clear needed)
+- Error format standardization around the shared `ApiErrorResponse` shape
+- **Important:** never read or write the refresh token from JavaScript — it lives exclusively in the `httpOnly; Secure; SameSite=Strict` cookie set by the backend (see Phase 3 Section 3). The auth store keeps only the access token and the user snapshot
 
 ### 6. Auth Store (Zustand)
 
@@ -94,26 +95,27 @@ Add the following shadcn/ui components:
 ```typescript
 interface AuthState {
   user: User | null;
-  accessToken: string | null;
-  refreshToken: string | null;
+  accessToken: string | null;      // in-memory only — never persisted to localStorage
   isAuthenticated: boolean;
   isLoading: boolean;
-  setAuth: (data: { user, accessToken, refreshToken }) => void;
+  setAuth: (data: { user, accessToken }) => void;
   clearAuth: () => void;
   updateUser: (data: Partial<User>) => void;
 }
 ```
 
-Tokens are stored in `localStorage`. With Zustand persist middleware.
+The access token is held in memory only. The refresh token is **not** in this store — it lives server-side in an `httpOnly; Secure; SameSite=Strict` cookie (Phase 3 Section 3) that JavaScript cannot read or write. This removes the XSS-exfiltration surface that came with storing both tokens in `localStorage` in earlier drafts.
+
+Zustand persist middleware persists only the `user` snapshot (id, username, avatar, rank, flags) so the header renders the logged-in state immediately on page reload. On mount the `AuthProvider` (below) rehydrates the access token by calling `POST /auth/refresh` — the browser sends the refresh cookie automatically, and the backend returns a fresh access token. If the refresh cookie is missing or invalid the response is `401` and `clearAuth()` runs, which also trims the persisted user snapshot.
 
 ### 7. Auth Provider
 
 **`src/providers/auth-provider.tsx`**:
-- On app mount, check token from localStorage
-- If token exists → fetch user info with `/users/me`
-- 401 → attempt refresh → if failed → clearAuth
-- Loading spinner while auth state is loading
-- Profile completion check: if user exists but `username`, `firstName`, or `lastName` is null → set `requiresProfileCompletion: true` in auth state. Auth guard redirects to `/complete-profile` when a write action is attempted.
+- On app mount, issue a silent `POST /auth/refresh` request with `credentials: "include"`. The browser attaches the httpOnly refresh cookie automatically; if the cookie is present and valid, the response carries a fresh access token and the user snapshot, and the store is hydrated
+- If the refresh returns 401 (missing / expired cookie), the store stays cleared and any persisted `user` snapshot is dropped so the UI renders the anonymous state from the very first paint
+- Loading spinner while the refresh is in flight; component children read from the resolved `isAuthenticated` afterwards
+- Profile completion check: if the resolved user has `username`, `firstName`, or `lastName` null → set `requiresProfileCompletion: true` in auth state. Auth guard redirects to `/complete-profile` when a write action is attempted
+- The provider wires the Socket.io provider to reconnect with the latest access token whenever it rotates, so the WebSocket periodic re-auth (Phase 6 Section 7) always sees the fresh token
 
 ### 8. TanStack Query Provider
 
@@ -173,14 +175,24 @@ Tokens are stored in `localStorage`. With Zustand persist middleware.
 **`src/components/shared/seo-head.tsx`**:
 - Helper for dynamic meta tags (title, description, OG)
 
-### 11.1. PostHog Analytics Provider
+### 11.1. Cookie Consent Banner + PostHog Analytics Provider
+
+PostHog analytics and the cookie-consent banner ship together in this phase. PostHog sets tracking cookies, so the KVKK / ePrivacy expectation is that it must not initialise until the user has explicitly accepted. The banner and the provider are wired as a single unit to remove any drift between "analytics is live" and "consent banner is live".
+
+**`src/components/shared/cookie-consent.tsx`** — the banner:
+- Rendered inside the root layout; displayed to every visitor whose `cookieConsent` preference (localStorage key `cookie-consent`) is missing
+- Turkish copy: heading "Çerez Tercihleri", body "Platformu geliştirmek ve deneyiminizi iyileştirmek için çerez kullanıyoruz."
+- Two buttons: `"Kabul Et"` → writes `cookie-consent: "all"`, hides banner, triggers the PostHog provider to initialise. `"Sadece Zorunlu"` → writes `cookie-consent: "essential"`, hides banner, PostHog stays dormant
+- Accessible: focus trap on first render, restores focus to the triggering element on dismissal, `role="dialog"`, labelled title + description
 
 **`src/providers/posthog-provider.tsx`**:
+- Reads `cookie-consent` on mount; only initialises PostHog when the value equals `"all"`
 - PostHog client initialization with `NEXT_PUBLIC_POSTHOG_KEY` (project ID: 160520, EU Cloud) and `NEXT_PUBLIC_POSTHOG_HOST` (`https://eu.i.posthog.com`)
 - Auto page view tracking enabled
-- Wrap in root layout (after cookie consent check — only initialize if analytics consent given)
 - User identification: after login, call `posthog.identify(userId, { username, email })`. On logout, call `posthog.reset()`
-- Respects cookie consent: if user has not accepted analytics cookies, PostHog is not initialized
+- When the user later changes the preference (e.g., via the profile settings → "Çerez Tercihleri" link), the provider tears down and re-initialises in place: switching from `"all"` to `"essential"` calls `posthog.reset()` + `posthog.opt_out_capturing()`; switching back re-initialises with the stored user context
+
+This replaces the earlier "defer banner to Phase 14" note — Phase 14 Section 12.1 now documents the already-shipped banner rather than deferring it.
 
 ### 12. Vitest Setup
 
@@ -230,10 +242,12 @@ src/app/
 Each page file contains only placeholder text for now. Actual content will be added in Phases 12-14.
 
 ## Security Checklist
-- [ ] Tokens are only in localStorage (if not using httpOnly cookies, be cautious of XSS)
-- [ ] API client handles token refresh on 401
-- [ ] Socket.io connection is authenticated
-- [ ] XSS protection: dangerouslySetInnerHTML is not used for user content rendering
+- [ ] Access token stays in memory only; no write to `localStorage` or `sessionStorage` for the token itself
+- [ ] Refresh token is never visible to JavaScript — it lives in the backend-issued `httpOnly; Secure; SameSite=Strict` cookie
+- [ ] API client uses `credentials: "include"` so the refresh cookie ships on `/auth/refresh` and `/auth/logout`, and only those calls
+- [ ] API client handles token refresh on 401 and retries the original request exactly once
+- [ ] Socket.io connection is authenticated (handshake + periodic re-auth with the rotated access token)
+- [ ] XSS protection: `dangerouslySetInnerHTML` is not used for user content rendering
 - [ ] No script injection risk in Twemoji-parsed text
 
 ## Test Plan

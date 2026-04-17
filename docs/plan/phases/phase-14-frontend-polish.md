@@ -42,13 +42,16 @@
 **Notification preferences link:** a small "Bildirim Ayarları" button at the top of the page opens `/profile/settings#notifications` (L-2, Phase 12).
 
 **Notification message formats** (authoritative source is Phase 10; this list mirrors it for frontend reference):
-- TOPIC_VOTED: "[Actor] konunuza oy verdi" → /topics/:slug
-- TOPIC_COMMENTED: "[Actor] konunuza yorum yaptı" → /topics/:slug
-- COMMENT_LIKED: "[Actor] yorumunuzu beğendi" → /topics/:slug (scrolls to the liked comment via `#comment-{id}` anchor)
-- COMMENT_REPLIED: "[Actor] yorumunuza yanıt verdi" → /topics/:slug (scrolls to the reply)
-- MENTIONED: "[Actor] sizi bir yorumda etiketledi" → /topics/:slug (scrolls to the comment containing the mention)
-- TOPIC_UPDATED: "[Actor] ilgilendiğiniz konuya bir güncelleme ekledi" → /topics/:slug (scrolls to the "Güncelleme" block)
-- COMMENT_HIGHLIGHTED: "[Actor] yorumunuzu öne çıkardı" → /topics/:slug (scrolls to the highlighted comment)
+- TOPIC_VOTED: "[Actor] konunuza oy verdi" → `/topics/:slug`
+- TOPIC_COMMENTED: "[Actor] konunuza yorum yaptı" → `/topics/:slug`
+- COMMENT_LIKED: "[Actor] yorumunuzu beğendi" → `/topics/:slug?focusCommentId={id}#comment-{id}`
+- COMMENT_REPLIED: "[Actor] yorumunuza yanıt verdi" → `/topics/:slug?focusCommentId={id}#comment-{id}`
+- MENTIONED (non-anonymous actor): "[Actor] sizi bir yorumda etiketledi" → `/topics/:slug?focusCommentId={id}#comment-{id}`
+- MENTIONED (anonymous actor): "Bir kullanıcı sizi bir yorumda etiketledi" → same target URL; the anonymous actor's display name is deliberately not surfaced in the notification (see Phase 10 Section 4 "Anonymous actor privacy rule")
+- TOPIC_UPDATED: "[Actor] ilgilendiğiniz konuya bir güncelleme ekledi" → `/topics/:slug#topic-update`
+- COMMENT_HIGHLIGHTED: "[Actor] yorumunuzu öne çıkardı" → `/topics/:slug?focusCommentId={id}#comment-{id}`
+
+**Focus behaviour:** Every comment-scoped notification URL carries the `focusCommentId` query parameter alongside the `#comment-{id}` anchor. The topic detail page (Phase 13) reads the query parameter, forwards it to `GET /topics/:topicId/comments?focusCommentId=...`, and the server pins the referenced comment to the first position of the response for that request only (see Phase 7 Section 7). The browser's native anchor scroll then brings the pinned card into view. A refresh that keeps the URL keeps the focus; a manual navigation that drops the parameter (the user scrolls to another topic and comes back via the feed) reverts to the standard listing order.
 
 **Note:** Notifications older than 90 days are automatically cleaned up by the backend cron job (Phase 10). The frontend doesn't need to handle this — it simply fetches whatever notifications exist.
 
@@ -199,16 +202,14 @@ Add event tracking to key user actions (PostHog provider set up in Phase 11):
 
 PostHog tracking respects cookie consent: only fires events if analytics consent is given.
 
-### 12.1. Cookie Consent Note
+### 12.1. Cookie Consent Banner (shipped in Phase 11)
 
-**MVP behavior:** The app uses localStorage for JWT tokens and essential session data only — no analytics or tracking cookies. A cookie consent banner is NOT required for MVP launch.
+The cookie consent banner and PostHog analytics provider were shipped together in Phase 11 Section 11.1. This section audits that they are still wired correctly at the end of the polish phase and documents the remaining follow-ups.
 
-**When analytics is added:** If PostHog (or any analytics tool) is enabled, a cookie consent banner must be shown:
-- Component: `src/components/shared/cookie-consent.tsx`
-- Position: bottom bar, first visit
-- Options: "Kabul Et" (all cookies) / "Sadece Zorunlu" (no analytics)
-- Consent stored in localStorage: `cookie-consent: "all" | "essential"`
-- PostHog only initializes if consent is `"all"`
+- The banner surface has been live since Phase 11; Phase 14's role is to confirm copy, focus behaviour, keyboard dismissal, and dark-mode rendering across every landing route
+- Settings → "Çerez Tercihleri" entry point: verify that clicking it re-opens the banner and that switching consent state (`"all"` ↔ `"essential"`) triggers the PostHog provider's teardown / re-init flow from Phase 11
+- Copy: heading `"Çerez Tercihleri"`, body `"Platformu geliştirmek ve deneyiminizi iyileştirmek için çerez kullanıyoruz."`, buttons `"Kabul Et"` / `"Sadece Zorunlu"`
+- PostHog remains dormant until `cookie-consent === "all"` — no telemetry leaves the browser before consent (the Phase 14 QA suite includes a network-tab assertion on a fresh visit)
 
 ### 12.2. Static Pages (MDX)
 

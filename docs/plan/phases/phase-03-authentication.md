@@ -75,21 +75,32 @@ auth/
 - Payload: `{ sub: userId, email, username, isVerified: boolean }`
 - Duration: `JWT_ACCESS_EXPIRATION` (15m)
 - Secret: `JWT_SECRET`
+- Transport to the frontend: returned inside the JSON response body. The frontend keeps it in memory (with an optional short-lived `sessionStorage` mirror that is cleared on tab close). It is **never** written to `localStorage`, because a successful XSS otherwise has full session take-over capability
 
 **Refresh Token:**
 - Payload: `{ sub: userId, tokenVersion: number }`
 - Duration: `JWT_REFRESH_EXPIRATION` (7d)
 - Secret: `JWT_REFRESH_SECRET`
 - `tokenVersion` is not stored in the database initially — simple stateless refresh. Token revocation can be added in the future.
+- Transport: the backend sets the refresh token as an **`httpOnly; Secure; SameSite=Strict`** cookie scoped to the auth path. JavaScript cannot read it, so XSS cannot exfiltrate it. The cookie's `Path` is locked to the auth endpoints (`/api/v1/auth`) so it is transmitted only when the browser calls `/auth/refresh` or `/auth/logout`. In development (`NODE_ENV=development`) the `Secure` flag is omitted so the cookie works over `http://localhost`; every other environment sets it
 
-**Token Return Format:**
+**Cookie configuration (`main.ts`):**
+- Register `cookie-parser` middleware so guards and controllers can read the refresh cookie server-side
+- CORS configuration (Phase 3 Section 14) must declare `credentials: true` and an explicit origin list — browsers refuse `SameSite=Strict` cookies on cross-origin requests when `*` is used as the allowed origin
+- Expose the refresh endpoint at `POST /auth/refresh` only — the cookie is never accepted on any other route
+
+**Token return format (login / register / refresh responses):**
 ```json
 {
   "accessToken": "...",
-  "refreshToken": "...",
   "user": { "id", "email", "username", "isVerified", "firstName", "lastName" }
 }
 ```
+The refresh token is **not** in the JSON body — it ships in the `Set-Cookie` header as `refreshToken=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`.
+
+**Refresh flow:** the frontend calls `POST /auth/refresh` with `credentials: "include"`; the browser attaches the refresh cookie automatically. The backend verifies it, issues a new access token, rotates the refresh cookie (writes a new one with a fresh 7-day TTL), and returns the new access token in the response body. Token rotation limits the window in which a stolen refresh token could be reused.
+
+**Logout flow:** `POST /auth/logout` sets the refresh cookie to an empty value with `Max-Age=0`, effectively deleting it. The frontend also drops the in-memory access token.
 
 ### 4. API Endpoints
 
@@ -110,17 +121,22 @@ auth/
 
 ### 5. Registration Flow (Email + Password)
 
+All writes in this flow happen inside a single `prisma.$transaction` so a partial failure cannot leave a half-created account.
+
 1. Client sends data with `RegisterSchema`
 2. Server-side validation (Zod)
 3. Email and username uniqueness check
 4. Password is hashed with bcrypt (salt rounds: 12)
-5. User is created (`emailVerifiedAt: null`, `provider: LOCAL`)
+5. User is created (`emailVerifiedAt: null`, `provider: LOCAL`, `totalXp: 0`)
 6. Default avatar is assigned (the avatar with `isDefault: true`)
 7. USER role is assigned
-8. 6-digit verification code is generated and stored in Redis (TTL: 10 minutes, key: `email-verify:{userId}`)
-9. Verification code is sent to the user's email via Resend (React Email template)
-10. Access + refresh tokens are returned
-11. **Post-registration redirect order:** Register → Consent screen → Email verification. Consent approval must happen before email verification. The client redirects to the consent screen first, then to email verification.
+8. **Initial rank assignment:** Look up the lowest-threshold active rank from the `Rank` table (`ORDER BY minXp ASC, sortOrder ASC LIMIT 1`) and set `user.currentRankId` to its id. With the seeded rank table this resolves to "Yeni Vatandaş" (0 XP). The assignment is part of the same transaction so every registered account always has a non-null `currentRankId` by the time the transaction commits — downstream card responses (`UserPublicCardSchema.rank.name`) never need to handle a null rank. The Phase 2 rank seed and Phase 8's `checkAndUpdateRank` reuse the same ordering rule
+9. 6-digit verification code is generated and stored in Redis (TTL: 10 minutes, key: `email-verify:{userId}`)
+10. Verification code is sent to the user's email via Resend (React Email template)
+11. Access + refresh tokens are returned
+12. **Post-registration redirect order:** Register → Consent screen → Email verification. Consent approval must happen before email verification. The client redirects to the consent screen first, then to email verification.
+
+**Google OAuth new-account branch:** When the OAuth callback creates a fresh user (`provider: GOOGLE`, `emailVerifiedAt: now()`), the same initial rank assignment is applied inside the user-creation transaction. This keeps the invariant consistent across both registration paths.
 
 ### 6. Email Verification Flow
 
@@ -195,19 +211,24 @@ Under `apps/api/src/modules/mail/`:
 1. Email address is received
 2. Check if user exists (return 200 even if not — email enumeration prevention)
 3. If OAuth user → return 200 but don't send email
-4. Generate random reset token, store in Redis (TTL: 30 minutes, key: `password-reset:{token}`)
-5. Send password reset link via email: `FRONTEND_URL/reset-password?token={token}`
+4. Generate a cryptographically strong random reset token (32 bytes, URL-safe Base64), store in Redis with **TTL 15 minutes** (key: `password-reset:{token}`, value: target `userId`). Every reset request invalidates any prior outstanding token for the same user (the service deletes `password-reset:*` entries whose value matches the user id before writing the new key) so an attacker cannot accumulate multiple valid tokens
+5. Send password reset link via email using the **URL fragment** form: `FRONTEND_URL/reset-password#token={token}`. Fragments never travel over the wire to the backend, never appear in reverse-proxy or Vercel access logs, and are not sent as `Referer` to third-party assets. The email template mentions both the link and the 15-minute validity window
 6. Rate limit: 1 request / 60 seconds (email-based)
 
 `POST /auth/reset-password`:
-1. Token and new password are received
-2. Check if token exists in Redis
+1. Token and new password are received in the request body (the frontend reads `window.location.hash`, strips it via `history.replaceState`, and POSTs the token + new password). Never accept the token via query string — if an incoming request has `?token=` only, return 400 `{ code: "VALIDATION_INVALID_INPUT" }`
+2. Look up the token in Redis. When the key is missing or the value does not resolve to an existing non-deleted user → return 400 `{ code: "AUTH_RESET_TOKEN_INVALID", message: "Bağlantının süresi dolmuş veya geçersiz" }` so the frontend can render the expired-link screen
 3. New password validation (same rules as RegisterSchema)
-4. Hash password with bcrypt, update
-5. Delete token from Redis
+4. Hash password with bcrypt, update the user's `passwordHash`
+5. Delete the token from Redis (single-use) and invalidate every active refresh token of the user (forces other sessions to re-login with the new password)
 6. Response: 200
 
-**Email template:** `password-reset.tsx` — Password reset link, expiration time info.
+**Frontend behaviour** (Phase 12):
+- `/reset-password` page reads `window.location.hash`; if empty, shows the Step 1 email form. If present, shows the Step 2 new-password form
+- Step 2 calls `POST /auth/reset-password` with the token in the JSON body (not the URL). On success: toast "Şifreniz başarıyla değiştirildi" + redirect to `/login`
+- On `AUTH_RESET_TOKEN_INVALID`: render a dedicated "Bağlantının süresi dolmuş" screen with a single CTA "Yeni bağlantı al" that re-opens the Step 1 form
+
+**Email template:** `password-reset.tsx` — Turkish copy, reset link using the fragment form, explicit "15 dakika içinde kullanılmalı" note, small footer clarifying "Bu isteği siz yapmadıysanız dikkate almayın".
 
 ### 12. Input Sanitization
 
@@ -250,6 +271,7 @@ CORS settings in `main.ts`:
 - [ ] Password reset token is single-use and time-limited
 - [ ] Input sanitization is active on all text fields
 - [ ] Email enumeration protection (forgot-password returns 200 in all cases)
+- [ ] Every newly created account — email/password or Google OAuth — has a non-null `currentRankId` by the time its creation transaction commits
 
 ## Test Plan
 

@@ -29,6 +29,7 @@
 - likeCount: number
 - author: `UserPublicCardSchema | AnonymousCardSchema | null` (null if deleted — card shape, no firstName/lastName)
 - isAuthor: boolean — `true` when the comment author is also the topic author AND the topic is NOT anonymous. Frontend renders a "Konu Sahibi" badge on such comments. Always `false` when the topic is anonymous (identity of the topic owner is concealed, so an OP indicator would leak the link between topic and commenter)
+- isOwnComment: boolean — `true` when the request is authenticated AND this comment's author is the requesting user. Clients use this flag to pin the viewer's own comments to the top of their rendered list (see Section 7 — Viewer-scoped ordering). The flag is viewer-scoped: comment A is `isOwnComment: true` for its author and `false` for everyone else
 - isHighlighted: boolean — `true` when the topic author has highlighted this comment (see "Highlighted Comments" section below)
 - highlightedAt: ISO date string | null — timestamp when the highlight was set; used to sort multi-highlighted comments
 - isLiked: boolean (only when authenticated — whether current user liked this comment)
@@ -46,6 +47,15 @@
 - parentId: UUID (optional — null = level 1, populated = level 2)
 - isAnonymous: boolean, default false
 
+**Turkish validation error messages (authoritative for every comment-side Zod refinement):** every validation error on the comment endpoints must return a short, professional, user-facing Turkish message via the standard `{ code, message, errors? }` envelope. Recommended wording for the common cases:
+- Content missing: `"Yorum boş olamaz"`
+- Content too long: `"Yorum en fazla 1000 karakter olabilir"`
+- Edit cooldown (30 s): `"Çok sık düzenleme yapıyorsunuz, lütfen birkaç saniye sonra tekrar deneyin"`
+- Anonymous consistency violation: `"Bu konudaki ilk yorumunuzda seçtiğiniz kimlik ayarını değiştiremezsiniz"`
+- Reply to deleted parent: `"Yanıtlamak istediğiniz yorum kaldırılmış"`
+
+The tone stays consistent with other user-facing platform copy: short, direct, professional, no technical jargon. Plain Turkish punctuation. No exclamation marks in error messages. The Phase 8 XP quality gate (distinct-character check) does **not** produce a visible error because the comment is still stored — the user simply earns no XP for that entry.
+
 **UpdateCommentSchema:**
 - content: min 1, max 1000 characters
 
@@ -53,6 +63,7 @@
 - page: number, default 1
 - limit: number, default 20, max 50
 - sort: "popular" | "newest" (default "popular")
+- focusCommentId: UUID (optional) — identifies a comment to pin to the top of the response for this request only. Used when the user clicks a notification that targets a specific comment. Non-destructive: subsequent requests without the parameter return the normal order. See Section 7 for the response contract
 
 ### 2. Comment Module
 
@@ -86,7 +97,10 @@ Under `apps/api/src/modules/comment/`:
    - If exists: use existing anonymous identity
    - If not: create new anonymous identity (animal list from Phase 5 + number)
 8. Create comment record
-9. Update `topic.commentCount += 1` (transaction)
+9. Update the denormalized counter on Topic **inside the same transaction**:
+   - If `parentId IS NULL` (level-1 comment) → `topic.commentCount += 1`
+   - Else (level-2 reply) → `topic.replyCount += 1`
+   - Never both; the counters partition the total comment volume
 10. WebSocket event: `comment:created` → `{ topicId, comment: CommentResponseSchema }` (to topic room)
 
 ### 4. Comment Editing
@@ -101,8 +115,10 @@ Under `apps/api/src/modules/comment/`:
 
 1. Author or `comment:delete` permission check
 2. Soft delete: `deletedAt = now()`
-3. Update `topic.commentCount -= 1` (transaction)
-4. Child replies are preserved (replies under a deleted comment remain visible)
+3. Decrement the matching denormalized counter on Topic inside the transaction:
+   - If the deleted comment was level-1 (`parentId IS NULL`) → `topic.commentCount -= 1`
+   - Else → `topic.replyCount -= 1`
+4. Child replies are preserved (replies under a deleted comment remain visible). Their parent's soft-deleted state does not recursively update reply counters — each row's own `deletedAt` is the source of truth for counting
 5. Deleted comment is returned as: `{ content: null, isDeleted: true, author: null }`
 
 **Moderator deletion — mandatory reason:** When the deleter is a moderator/admin (not the author), the request body must include a `reason` field (min 5, max 500 characters, HTML stripped, Turkish user-facing text). This follows the same accountability pattern as topic deletion (Phase 5):
@@ -148,7 +164,7 @@ The topic author can mark any comment on their topic as "öne çıkarılan" (hig
 2. **Self-like prevention:** `comment.authorId === currentUser.id` → 403
 3. Unique constraint: `(userId, commentId)`. Already liked → 409
 4. Create `CommentLike` record
-4. `comment.likeCount += 1` (transaction)
+5. `comment.likeCount += 1` (transaction)
 
 **Unlike:** `DELETE /comments/:id/like`
 1. Does like record exist? If not → 404
@@ -161,15 +177,24 @@ The topic author can mark any comment on their topic as "öne çıkarılan" (hig
 
 `GET /topics/:topicId/comments`:
 
-**Level 1 comments** (paginated):
-- Comments with `parentId: null`
-- **Highlighted comments always float to the top** regardless of the chosen sort — `ORDER BY isHighlighted DESC, highlightedAt DESC, {selected sort}`. This mirrors Stack Overflow's "accepted answer pinned to top" pattern. When no comment is highlighted, the rest of the ordering applies unchanged
-- Base sorting (applied after the highlight group):
-  - `sort=popular` → `likeCount DESC, createdAt ASC`
-  - `sort=newest` → `createdAt DESC`
-- For each comment: id, content (or null if deleted), author card (or anonymous card), isAnonymous, isEdited, isAuthor, isHighlighted, highlightedAt, likeCount, createdAt
+**Level 1 comments** (paginated). The ordering is defined in three layers that compose deterministically:
+
+1. **Focus layer (viewer-scoped, optional).** If the request carries `focusCommentId`:
+   - The referenced comment must belong to this topic (and not be soft-deleted). If it does not, the parameter is silently ignored — no 400 — because a clicked notification may point at a later-deleted comment and the list should still render
+   - When valid, the focused comment is returned as the first element of the payload regardless of sort/page. It is also excluded from subsequent pages so it never shows up twice in pagination
+   - Scope: this reordering applies only to the request that carries the parameter. A follow-up request without `focusCommentId` (the user refreshes, scrolls, or navigates away and back without the notification context) returns the normal order
+2. **Pin layer (global).** `isHighlighted` comments float to the top — `ORDER BY isHighlighted DESC, highlightedAt DESC`. Mirrors Stack Overflow's accepted-answer pattern. When no comment is highlighted, this layer is a no-op
+3. **Viewer-scoped own-comment layer.** When the request is authenticated, comments authored by the viewer float above comments from others within the same highlight group (i.e., `isOwnComment DESC` is appended after the highlight ordering and before the base sort). This is a per-viewer ordering — each user sees their own comment earlier in the list, other users see the normal order. This preserves the "keep my voice visible" behaviour without globally reordering the thread
+4. **Base sort.**
+   - `sort=popular` → `likeCount DESC, createdAt ASC`
+   - `sort=newest` → `createdAt DESC`
+
+Final `ORDER BY`: `{focus comment virtualised first-row} → isHighlighted DESC, highlightedAt DESC → isOwnComment DESC → {selected base sort}`. In SQL terms, the focus comment is fetched via a separate query and prepended in the service layer; the rest of the ORDER BY is a single compound clause on the main query.
+
+- For each comment: id, content (or null if deleted), author card (or anonymous card), isAnonymous, isEdited, isAuthor, isOwnComment, isHighlighted, highlightedAt, likeCount, createdAt
 - **`isAuthor` computation:** In the mapping layer, set `isAuthor = (comment.authorId === topic.authorId) && !topic.isAnonymous`. For anonymous topics, always return `false` — exposing that the commenter is the topic owner would defeat the anonymity guarantee
-- Under each level 1 comment, **level 2 replies** are also returned (no separate pagination, limit: first 5 replies + total reply count). Use Prisma `include` for eager loading: `include: { replies: { take: 5, orderBy: { createdAt: 'asc' } } }` to avoid N+1 queries. Replies also carry the `isAuthor` flag using the same rule
+- **`isOwnComment` computation:** only set when the request is authenticated. `isOwnComment = (comment.authorId === currentUser.id)`. Unauthenticated listings always return `isOwnComment: false`. The flag is computed in the service layer, not exposed through Prisma `select`, so no additional column is needed
+- Under each level 1 comment, **level 2 replies** are also returned (no separate pagination, limit: first 5 replies + total reply count). Use Prisma `include` for eager loading: `include: { replies: { take: 5, orderBy: { createdAt: 'asc' } } }` to avoid N+1 queries. Replies also carry the `isAuthor` and `isOwnComment` flags using the same rules; the own-comment float only applies to the level-1 list — replies stay in their natural order so a user's reply doesn't jump above the parent's other replies
 
 **Level 2 reply expansion:**
 `GET /comments/:id/replies?page=1&limit=20` — Fetch all replies for a parent comment, paginated. First 5 replies are shown inline in the topic comment list, "X more replies" button calls this endpoint.
@@ -203,10 +228,12 @@ This way the comment tree is not broken, and the user sees a "this comment was d
 When a comment is created or edited, the backend parses the content for `@username` patterns and creates notifications for mentioned users.
 
 **Backend parsing:**
-1. Extract all `@username` patterns from comment content using regex: `/(?<!\w)@([a-zA-Z0-9_]{3,30})(?!\w)/g`
-2. Validate each username: check if user exists and is not deleted
-3. Filter out: self-mention (author mentioning themselves), blocked users (mutual block), duplicate mentions (same user mentioned multiple times → notify once)
-4. For each valid mention: create a `MENTIONED` notification (see Phase 10)
+1. Normalise the comment content with `content.normalize('NFKC')` before regex matching. NFKC collapses compatibility Unicode forms so visually identical but differently encoded whitespace / zero-width characters cannot slip past the boundary checks
+2. Extract candidate mentions with a Unicode-aware regex: `/(?<![\p{L}\p{N}_])@([A-Za-z0-9_]{3,30})(?![\p{L}\p{N}_])/gu`. The username charset stays ASCII-only (matching the registration rules in Phase 3); the surrounding boundary uses `\p{L}\p{N}_` with the `u` flag so characters like Turkish letters, emoji, and zero-width non-joiners are treated as word characters for boundary detection. This prevents false positives where adversarial content wraps `@` with invisible glue characters
+3. Deduplicate candidates early (case-insensitive set) and cap the resolved mention list at **10 distinct usernames per comment**. Remaining candidates are silently dropped — 10 covers every legitimate case and makes catastrophic backtracking impossible even on 1000-character comments
+4. For each distinct candidate: look the username up in a single batched query (`WHERE username IN (:candidates)`). Filter out: missing users, soft-deleted users, self-mention (author mentioning themselves), users under a symmetric block with the comment author (`BlockService.isBlocked` from Phase 9)
+5. For each remaining user: create a `MENTIONED` notification (see Phase 10). On comment edit the re-run only notifies users who were not in the previous mention set (same rule as before)
+6. Regex execution is wrapped in a try/catch; any regex runtime failure logs the content id + stack to Pino `warn` and treats the comment as having zero mentions rather than failing the whole create/update request
 
 **On comment edit:**
 - Re-parse the updated content for @mentions

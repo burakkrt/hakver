@@ -39,7 +39,7 @@ AuthProvider: LOCAL, GOOGLE
 VoteType: RIGHT, WRONG
 ReportTargetType: TOPIC, COMMENT, USER
 ReportStatus: PENDING, REVIEWED, RESOLVED, DISMISSED
-NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED, COMMENT_HIGHLIGHTED
+NotificationType: TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED, MENTIONED, TOPIC_UPDATED, COMMENT_HIGHLIGHTED, ADMIN_BROADCAST
 ReferenceType: TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER
 ```
 
@@ -123,7 +123,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | id | UUID | PK |
 | title | String | max 150 |
 | content | String | max 3000 |
-| slug | String | unique, index — auto-generated from title, for SEO-friendly URLs |
+| slug | String | unique, index — composed as `{title-slug}-{shortKey}` for SEO-friendly URLs; see Phase 5 Section 6 for the generation rule |
 | authorId | FK → User | index |
 | categoryId | FK → Category | index |
 | isAnonymous | Boolean | default false |
@@ -131,7 +131,10 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | editableUntil | DateTime | createdAt + 12 hours |
 | voteCountRight | Int | default 0, denormalized |
 | voteCountWrong | Int | default 0, denormalized |
-| commentCount | Int | default 0, denormalized |
+| commentCount | Int | default 0, denormalized — counts only level-1 (parent) comments that are NOT soft-deleted |
+| replyCount | Int | default 0, denormalized — counts level-2 replies (`parentId IS NOT NULL`) that are NOT soft-deleted; exposed through the topic detail response but never on the topic card |
+| trendingScore | Float | default 0, denormalized — time-weighted engagement score; recomputed every 5 minutes by the "Trending Score Recompute" cron (Phase 17 / Phase 5 Section 10). Older than 7 days → stays 0 |
+| controversialScore | Float | default 0, denormalized — balance-weighted engagement score (high when RIGHT and WRONG votes are close AND the topic has real engagement); recomputed by the same cron job. Older than 7 days → stays 0 |
 | coverImageId | FK → TopicImage? | null = first image is cover |
 | isPinned | Boolean | default false |
 | pinnedAt | DateTime? | when the topic was pinned |
@@ -202,7 +205,7 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | description | String? | |
 | isActive | Boolean | default true |
 
-#### XpLog
+#### XpLog (hot table)
 | Field | Type | Constraint |
 |-------|------|-----------|
 | id | UUID | PK |
@@ -212,6 +215,18 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | referenceType | ReferenceType enum | |
 | referenceId | UUID | related entity ID |
 | metadata | Json? | additional context (e.g., `{ topicId }` for comment XP, `{ voterId }` for vote-received XP, `{ reason, adjustedBy }` for admin adjustments) |
+| createdAt | DateTime | default now |
+
+Holds the **last 12 months** of XP events in the primary database. Older rows migrate nightly to `XpLogArchive` — see below and Phase 10 Section 9.2 for the cron.
+
+#### XpLogArchive (cold table)
+Same columns as `XpLog`. Daily cron moves rows older than 12 months from `XpLog` into `XpLogArchive`, then deletes them from the hot table. Keeping the schema identical lets reconciliation, data-export, and admin-view queries reuse the same DTO shape; only the query target changes. The archive row retention strategy is **indefinite** at MVP — the table stays for KVKK data-export completeness, statistics, and auditability, and is vacuumed only when a user's account is fully retired (Phase 4 Section 10 Stage 2 cold archive).
+
+Key consequences for downstream queries:
+- Daily XP cap (Phase 8) only ever consults `XpLog` (today's window is well under 12 months)
+- Reconciliation cron (Phase 10 Section 9) reads `SUM(XpLog.points) + SUM(XpLogArchive.points)` when comparing against `User.totalXp`
+- Admin `/admin/users/:id/xp-logs` endpoint (Phase 8 Task 5.1) paginates over `XpLog` by default with a toggle to include archive rows when the admin needs long-history review
+- KVKK personal data export (Phase 4 Section 11) iterates both tables so the user always receives their complete XP history
 
 #### Rank
 | Field | Type | Constraint |
@@ -276,9 +291,11 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | id | UUID | PK |
 | userId | FK → User | index (recipient) |
 | type | NotificationType enum | |
-| actorId | FK → User | the **latest** actor that triggered/updated this notification (for aggregation, this is the most recent contributor). Nullable for system notifications |
-| referenceType | ReferenceType enum | |
+| actorId | FK → User | the **latest** actor that triggered/updated this notification (for aggregation, this is the most recent contributor). Non-nullable: every MVP notification has a concrete acting user, including `ADMIN_BROADCAST` where the actor is the admin who dispatched the broadcast |
+| referenceType | ReferenceType enum | includes `USER` when the reference is the admin that sent an `ADMIN_BROADCAST` |
 | referenceId | UUID | |
+| title | String? | optional short heading used for `ADMIN_BROADCAST` (e.g., "Bakım Duyurusu"); null for every other notification type |
+| body | String? | optional multi-line body used for `ADMIN_BROADCAST` (max 1000 chars, HTML-stripped); null for every other notification type |
 | isRead | Boolean | default false |
 | aggregatedCount | Int | default 1 — total number of aggregated actors (grows as new same-type-same-target actions fold into this record) |
 | updatedAt | DateTime | last time a new actor aggregated into this notification; used for sorting/dedup window checks |
@@ -321,6 +338,17 @@ Per-user, per-type toggles. Missing row = default enabled.
 | createdAt | DateTime | default now |
 | | | @@unique([userId, topicId]) |
 
+#### TopicSubscription
+Explicit opt-in subscription that a non-author user can create on a topic to receive update notifications when the author edits the topic or adds an update note. Authors are subscribed implicitly to their own topics (no row needed; the notification service treats `topic.authorId === userId` as subscribed). Voters and commenters are **not** automatically subscribed — the default is no notification, the user must toggle subscription on the topic detail page.
+
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| userId | FK → User | index |
+| topicId | FK → Topic | index |
+| createdAt | DateTime | default now |
+| | | @@unique([userId, topicId]) — one subscription row per user/topic pair |
+
 #### NotificationMute
 | Field | Type | Constraint |
 |-------|------|-----------|
@@ -359,38 +387,15 @@ Per-user, per-type toggles. Missing row = default enabled.
 | acceptedAt | DateTime | default now |
 | ipAddress | String? | |
 
-#### Badge (badge definition)
-Comprehensive, tiered badge system. The base tables live here; the full badge catalog and the XP bonus / advantage semantics tied to some badges are finalized in a **separate design document** (see "Detailed Design Pending Items" in `plan.md`).
-
-| Field | Type | Constraint |
-|-------|------|-----------|
-| id | UUID | PK |
-| code | String | unique — program-readable identifier (e.g., `loyal_bronze`, `loyal_silver`, `vote_master_gold`) |
-| name | String | Turkish user-facing display name (e.g., "Sadık", "Oy Ustası") |
-| description | String | max 500 — Turkish description shown when the badge is awarded or displayed on the profile |
-| icon | String | icon identifier (Lucide name or custom SVG key) |
-| tier | String? | null = tierless single badge. Otherwise: BRONZE / SILVER / GOLD |
-| group | String? | groups a tiered chain under one code (e.g., `loyal` aggregates all "Sadık" tiers) |
-| conditionType | String | action type (TOPIC_CREATE, VOTE_CREATE, COMMENT_LIKE_RECEIVED, STREAK_DAYS, XP_THRESHOLD, MANUAL, …) |
-| conditionValue | Int | threshold value (e.g., 100 votes) |
-| bonusEffect | Json? | **Pending design — placeholder field.** Carries the bonus semantics for badges that grant an XP gain percentage or other advantage. Example shape: `{ type: "XP_GAIN_MULTIPLIER", scope: "VOTE_CREATE", percent: 10 }`. Stored as JSON so that the full catalog and effect semantics can be finalized in the separate design before launch without a schema migration |
-| sortOrder | Int | UI ordering |
-| isActive | Boolean | default true |
-
-#### UserBadge (badges awarded to a user)
-| Field | Type | Constraint |
-|-------|------|-----------|
-| id | UUID | PK |
-| userId | FK → User | index |
-| badgeId | FK → Badge | |
-| awardedAt | DateTime | default now |
-| | | @@unique([userId, badgeId]) — the same badge is never awarded twice to the same user |
+> **Badge tables are intentionally not part of MVP scope.** The badge system (catalog, tier structure, XP bonus semantics, award mechanics) has not been designed yet. When the design is finalized, Badge and UserBadge tables will be added via a dedicated migration alongside the catalog and service layer. Until then, the schema omits these tables entirely to keep MVP surface area tight. See `plan.md` "Detailed Design Pending Items" for the placeholder.
 
 ### 4. Indexes
 
 Additional indexes for performance:
 - `Topic`: `(categoryId, createdAt DESC)` — category-based listing
 - `Topic`: `(authorId, createdAt DESC)` — user topics
+- `Topic`: `(isPinned DESC, trendingScore DESC)` — powers `sort=trending` listing (pinned first, then precomputed score)
+- `Topic`: `(isPinned DESC, controversialScore DESC)` — powers `sort=controversial` listing (pinned first, then precomputed score)
 - `Comment`: `(topicId, likeCount DESC)` — like-based sorting
 - `Comment`: `(topicId, isHighlighted DESC, highlightedAt DESC)` — highlighted comments float to top of listing
 - `Vote`: `(topicId)` — topic-based vote counting
@@ -402,8 +407,6 @@ Additional indexes for performance:
 - `UserNotificationPreference`: `(userId, type)` — unique, preference lookup
 - `UserRestriction`: `(userId, expiresAt)` — active restriction check
 - `UserBlock`: `(blockedId)` — reverse block lookup for symmetric block checks
-- `Badge`: `(group, tier)` — tier chain queries
-- `UserBadge`: `(userId, awardedAt DESC)` — profile badge listing
 
 ### 4.1. Search Index (pg_trgm)
 
@@ -480,16 +483,14 @@ Progression: each tier is roughly 2–2.3x the previous threshold. Early tiers r
 Each should be written in a professional and formal tone (in Turkish). They should be as detailed as if prepared by a real lawyer.
 
 **Admin user:**
-- email: from environment variable or default
-- username: admin
+- email: read from the `ADMIN_EMAIL` env variable (validated at startup by Phase 1 configuration)
+- password: read from the `ADMIN_PASSWORD` env variable, hashed with bcrypt (same salt rounds as normal registration)
+- username: `admin`
+- firstName / lastName: `"Yönetici"` / `"Hakver"` placeholder values (admin can edit post-login)
 - role: ADMIN
+- `emailVerifiedAt`: set to `now()` so the admin account can perform write actions without going through the verification flow
 
-**Badge seed (placeholder — detailed design pending):**
-
-The badge system is part of the MVP per the user's decision. A comprehensive + tiered structure, together with XP gain bonuses on certain badges, is planned. The full catalog (name, condition, tier thresholds, bonus effects) is finalized in a **separate design document**. For the seed stage:
-
-- Starter milestone badges (Bronze tier only) are included in the seed: "Hoş Geldin" (email verification), "İlk Oy", "İlk Konu", "İlk Yorum" — `conditionType: MANUAL` or the matching action + `conditionValue: 1`, `bonusEffect: null`
-- The full tiered badge catalog (Sadık Bronze/Silver/Gold, Oy Ustası, Halk Kahramanı, etc.) and XP bonus effects will be added via a separate design document + PR before launch. This placeholder keeps the schema exercised and provides enough badges for MVP smoke tests
+The seed script must skip admin creation when a user with the `ADMIN_EMAIL` address already exists (idempotent re-seed). The plaintext `ADMIN_PASSWORD` is never persisted — only the bcrypt hash is written to the database.
 
 **`UserNotificationPreference` seed defaults:** The table is empty when a user registers (absent row = default enabled). The registration flow does not insert preference rows; the first toggle on the settings page creates the row on demand.
 

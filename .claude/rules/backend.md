@@ -10,6 +10,14 @@ paths:
 - Database operations go through the ORM service. Raw queries are allowed only for scenarios the ORM does not support (row-level locking, extension management, full-text/trigram index creation); when used, document the reason in the migration or service file
 - User-facing error messages in Turkish, seed data in Turkish
 
+## Prisma Query Shape
+- Every list / detail / card endpoint must declare an explicit `select` (or tightly scoped `include`) object. Implicit "return all scalar columns" reads are rejected in code review because they inflate payload, widen SQL, and accidentally surface columns like `email` or `passwordHash`
+- Colocate reusable selects under `apps/api/src/common/prisma-selects/` (shared package cannot import Prisma). Each module owns a named select object per response shape (e.g., `topicCardSelect`, `topicDetailSelect`, `commentListSelect`) and imports it instead of redeclaring the same shape across services
+- Prisma types must never leak to the frontend. The service layer maps the query result into the shared response DTO (`@hakver/shared`) before returning — no `Prisma.TopicGetPayload<...>` ever appears in controller return types
+
+## Rate Limit Response Format
+- When implementing a new rate-limited endpoint, follow the formatted Turkish 429 response template defined in `.claude/rules/security.md` → "Rate Limiting" section. The message must use the largest non-zero unit ("1 saat 15 dakika", "35 dakika", "45 saniye") and never render a zero-valued unit. The response envelope carries `code: "RATE_LIMIT_EXCEEDED"`, `message`, and `retryAfter` (seconds). Do not invent per-endpoint message formats
+
 ## HTTP Method Semantics (REST conventions)
 
 Every new endpoint must pick the HTTP method that matches the operation's meaning. Choose based on the action's effect, not by habit:

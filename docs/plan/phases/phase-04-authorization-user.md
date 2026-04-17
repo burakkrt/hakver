@@ -90,6 +90,19 @@ Under `apps/api/src/common/guards/`:
 - `@RequireVerified()` — Email verification required
 - `@CurrentUser()` — User object from request
 
+### 2.2. `@SelfOnly` Decorator
+
+Endpoints whose response is tied to the authenticated user (e.g., `GET /users/:username/votes`) must reject requests where the URL parameter does not match the caller. Hand-rolled inline checks drift over time; a single decorator is the authoritative implementation.
+
+**`@SelfOnly(paramName: string)`** — reads the specified route parameter from the request, compares it case-insensitively against `request.user.username`, and:
+- When the values match → proceed to the controller
+- When the values do not match → short-circuit with `404 Not Found` using the relevant resource's NOT_FOUND envelope (e.g., `{ code: "USER_NOT_FOUND", message: "Kullanıcı bulunamadı" }`). Returning 404 (not 403) prevents existence leakage — a curious caller cannot confirm which usernames have activity on the platform
+- Moderators and admins also receive 404. This endpoint family is scoped to the owner only; admin and moderator surfaces use the dedicated admin endpoints (Phase 15) when they need the same data for moderation review. The self-only rule is deliberately strict so the same decorator protects future self-scoped endpoints without having to enumerate role exceptions
+
+Apply to:
+- `GET /users/:username/votes` — initial self-only endpoint in this phase
+- Any future endpoint whose response body reflects the authenticated user's private signal surface (own activity feeds, private bookmark variants, etc.)
+
 ### 2.1. Profile Completion Guard
 
 **`profile-complete.guard.ts`** — Checks that the user's profile is complete before allowing write actions. Required fields: `username`, `firstName`, `lastName`.
@@ -126,7 +139,7 @@ user/
 | DELETE | /users/me | JWT + Verified | Delete account (KVKK anonymization) |
 | GET | /users/:username | Public | User profile (public response) |
 | GET | /users/:username/topics | Public | Topics created by the user |
-| GET | /users/:username/votes | JWT (self only) | Topics the user voted on |
+| GET | /users/:username/votes | JWT + `@SelfOnly('username')` (Section 2.2) | Topics the user voted on — returns 404 USER_NOT_FOUND for any caller other than the owner, including moderators and admins, to avoid existence leakage |
 | GET | /users/:username/comments | Public | Topics the user commented on |
 | GET | /users/me/profile-status | JWT | Profile completion status (which fields are missing) |
 | GET | /avatars | Public | Available avatar list (cached — `@CacheTTL(3600)`, invalidate on admin avatar changes) |
@@ -206,25 +219,56 @@ Deleted users do NOT receive notifications, do NOT trigger fan-out, and do NOT a
 2. Check that the avatar has `isActive: true`
 3. Update the user's `avatarId` field
 
-### 10. Account Deletion (KVKK Anonymization)
+### 10. Account Deletion (KVKK Anonymization + Cold Archive)
 
-When `DELETE /users/me` is called:
+When `DELETE /users/me` is called the account is anonymized immediately and its lingering personal artefacts are scheduled for permanent removal. The content the account produced (topics, votes, comments) is preserved behind an anonymous presentation so the community record stays intact while the owner's identity disappears from the product surface. Everything in this section runs inside a single `prisma.$transaction` so either the account is fully retired or nothing changes.
 
-1. User verifies their password (or confirmation flag for OAuth users)
-2. Personal data is anonymized:
+**Stage 1 — Anonymize on the spot (synchronous, inside the delete request):**
+
+1. User verifies their password (or confirms with a flag for OAuth users). The confirmation flow stays Turkish and warns that the action cannot be reversed
+2. Personal data on the `User` row is anonymized:
    - `firstName = "Silinmiş"`
    - `lastName = "Kullanıcı"`
    - `email = "deleted_{uuid}@hakver.local"`
-   - `username = "deleted_{uuid}"`
+   - `username = "deleted_{uuid}"` — never rendered to other users; card responses substitute the fixed "Silinmiş Kullanıcı" label (see Phase 4 Section 5.1)
    - `bio = null`
    - `passwordHash = null`
    - `providerId = null`
-   - `dateOfBirth` → set to epoch date
-3. `deletedAt = now()` is set
-4. Topics and comments created by the user are preserved but displayed with an anonymous "Silinmiş Kullanıcı" profile card. All non-anonymous topics and comments by this user are retroactively displayed as anonymous (author info hidden). Anonymous content continues to show its existing AnonymousIdentity (e.g., "Anonim Penguen #4521").
-5. `AnonymousIdentity` records are preserved — they reference the anonymized user via FK. Since the user is soft-deleted, the unique constraint `(userId, topicId)` will not be violated (deleted users cannot create new content).
-6. Votes by the deleted user are preserved (vote counts remain accurate).
-7. All active sessions are invalidated (future: token blacklist)
+   - `avatarId` kept as a reference to the dedicated "silinmis" avatar in the Avatar seed (card responses render this avatar)
+   - `dateOfBirth` → set to epoch
+   - `totalXp = 0`, `currentRankId = null` — XP and rank no longer surface on cards for this account
+3. `deletedAt = now()` is set. The `User.deletedAt IS NOT NULL` predicate is the authoritative "account retired" flag used by every other module
+4. **Owner-side artefact cleanup (delete within the same transaction — rows this user owns that no longer make sense after retirement):**
+   - `TopicBookmark` where `userId = deleted user`
+   - `NotificationMute` where `userId = deleted user`
+   - `UserBlock` where `blockerId = deleted user` (rows where this user was blocking others)
+   - `UserNotificationPreference` where `userId = deleted user`
+   - `NotificationActor` rows authored by the deleted user are left in place so aggregated cards keep their structure; card hydration swaps the account for the "Silinmiş Kullanıcı" presentation (see below)
+   - `Notification` rows whose recipient is the deleted user are deleted (no need to notify a retired account)
+   - Pending `/users/me/data-export` jobs authored by the deleted user are cancelled
+5. **Other-side artefact preservation (untouched):**
+   - `UserBlock` where `blockedId = deleted user` (rows where other users blocked this account) — preserved so the other user's intent is honoured even if the target later no longer "exists" from the product's perspective. These rows render in the blocklist UI with the "Silinmiş Kullanıcı" card + a disabled "Engeli Kaldır" button (the other user can still click to remove the block manually, but the card itself carries no profile link)
+   - `AnonymousIdentity` rows — preserved so anonymous topics/comments keep their "Anonim Penguen #4521" label. The unique `(userId, topicId)` constraint stays valid because the retired account cannot produce new rows
+   - `Vote` rows — preserved so topic vote counts remain accurate
+   - `Topic` / `Comment` rows — preserved; all previously non-anonymous posts are retroactively rendered as anonymous "Silinmiş Kullanıcı" cards (see Phase 4 Section 5.1 for the `isDeletedAuthor` flag propagation rule)
+   - `Report` rows (against the deleted user) — preserved for moderator auditability
+6. All active sessions of the deleted account are invalidated (future: token blacklist; for MVP the refresh token's cookie is cleared by the response and the short-lived access token expires within 15 minutes)
+7. The account transition is written to `ActivityLog` (`action: "account:delete"`, category: security, 1-year retention)
+
+**Stage 2 — Cold archive + full personal-data removal (post-MVP cron, placeholder now):**
+
+A scheduled job will eventually carry retired accounts through their KVKK-compliant final step: the residual FK on content rows (`Topic.authorId`, `Comment.authorId`, `Vote.userId`, `NotificationActor.actorId`, etc.) is copied into a detached archive database (no linkage back to `User.id`) and the primary `User` row is hard-deleted. The archive rows carry only the fields required to keep anonymous presentation working (for example `Topic.authorDisplay = "Silinmiş Kullanıcı"`, `Vote.topicId`, `AnonymousIdentity.displayName`), never the former personal data. After this step:
+
+- The hot database no longer contains any row that can reconstruct the deleted user's identity
+- Listings and content continue to render with the "Silinmiş Kullanıcı" anonymous card, now sourced from the archive mirror
+- Any URL targeting the former username (`/users/deleted_{uuid}`) responds with `ProfileUnavailableResponseSchema { accountUnavailable: true, reason: "DELETED" }` with `<meta name="robots" content="noindex">` on the page
+
+This cold-archive pipeline is **not part of MVP scope** — Stage 1 alone is sufficient for launch because the anonymization completely removes personal surfaces from the product. The Stage 2 cron is tracked as a KVKK follow-up in `docs/post-mvp.md` (see "Deleted-Account Cold Archive Pipeline"). Phase 4 references the eventual existence of this pipeline so the schema and the card hydration rule are designed to survive the transition without a second migration.
+
+**Anonymous card enforcement on listings (MVP-visible):**
+- Every endpoint that returns a `UserPublicCardSchema` calls the deleted-author propagation rule (Phase 4 Section 5.1) and substitutes: fixed label "Silinmiş Kullanıcı", default "silinmis" avatar, rank omitted, `totalXp: 0`, card non-clickable (no link to a profile, bookmarks page, or any other surface). Any card UI component treats `isDeletedAuthor === true` as an instruction to render the locked-down anonymous presentation
+- The `username` surfaced by card responses for deleted accounts is **always** the constant string "Silinmiş Kullanıcı" — the raw `deleted_{uuid}` form is never leaked to the client. This prevents both accidental display and URL probing
+- Security surfaces: attempting to access `/users/deleted_{uuid}`, `/users/deleted_{uuid}/topics`, `/users/deleted_{uuid}/comments`, or `/users/deleted_{uuid}/votes` returns `ProfileUnavailableResponseSchema` with `reason: "DELETED"` (the underlying username is not echoed back, so a probe cannot confirm existence)
 
 ### 11. KVKK Personal Data Export
 

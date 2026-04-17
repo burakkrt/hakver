@@ -89,9 +89,14 @@ apps/api/
 - Port: from `PORT` environment variable
 - `nestjs-pino` logger integration
 
-**`configuration.ts`** — Centrally manage all environment variables with `@nestjs/config`. Apply runtime validation with Zod — throw an error before the application starts if an env variable is missing or invalid. Must validate `ADMIN_URL` alongside other required variables.
+**`configuration.ts`** — Centrally manage all environment variables with `@nestjs/config`. Apply runtime validation with Zod — throw an error before the application starts if an env variable is missing or invalid. The required set includes `ADMIN_URL`, `ADMIN_EMAIL` (valid email format), and `ADMIN_PASSWORD` (non-empty); these drive the admin user created by the Phase 2 seed script and must therefore be present in every environment. In production the startup check additionally warns (or refuses, depending on deployment posture) when `ADMIN_PASSWORD` equals the documented development default.
 
-**Health endpoint** — `GET /api/v1/health` → `{ status: "ok", timestamp }`. For deployment verification.
+**Health endpoints (split using `@nestjs/terminus`):**
+
+- `GET /api/v1/health/live` → `{ status: "ok", timestamp }`. Liveness probe; returns 200 as long as the NestJS process is accepting requests. Never checks external dependencies — the Railway liveness probe treats a failure here as "restart the container"
+- `GET /api/v1/health/ready` → `{ status, timestamp, checks: { database: "up" | "down", redis: "up" | "down" } }`. Readiness probe; runs a cheap `SELECT 1` through Prisma and a `PING` against Redis. Returns `503 Service Unavailable` with the same envelope whenever any dependency is down so Railway's readiness probe can pull the container out of the load-balancer pool without killing it. Response time budget: 300 ms
+
+Railway is configured to probe `/api/v1/health/ready`; the legacy single `/health` path is dropped. Uptime monitoring and deploy verification both consume `/health/ready`. `@nestjs/terminus` provides the standard `HealthCheckService` + `PrismaHealthIndicator` + custom Redis indicator — no hand-rolled health logic.
 
 ### 5. Next.js Frontend (apps/web)
 
@@ -144,15 +149,15 @@ packages/shared/
 **`enums.ts`** — Enums matching the Prisma schema exactly: `Gender`, `AuthProvider`, `VoteType`, `ReportTargetType`, `ReportStatus`, `NotificationType`, `ReferenceType` (TOPIC, COMMENT, VOTE, COMMENT_LIKE, USER). Every enum defined in the Prisma schema must also be defined here.
 
 **`error-codes.ts`** — Standard error codes. These codes are used in backend responses across all phases:
-- `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT
+- `AUTH_*`: INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, TOKEN_EXPIRED, OAUTH_EMAIL_CONFLICT, RESET_TOKEN_INVALID
 - `VALIDATION_*`: INVALID_INPUT, DUPLICATE_USERNAME, DUPLICATE_EMAIL
-- `TOPIC_*`: NOT_FOUND, EDIT_EXPIRED, PREREQUISITE_NOT_MET, UPDATE_NOTE_NOT_FOUND
+- `TOPIC_*`: NOT_FOUND, EDIT_EXPIRED, PREREQUISITE_NOT_MET, UPDATE_NOTE_NOT_FOUND, IMAGE_LIMIT_EXCEEDED
 - `VOTE_*`: ALREADY_VOTED, SELF_VOTE, NOT_FOUND
 - `COMMENT_*`: EDIT_COOLDOWN, ANONYMOUS_LOCKED, NOT_AUTHOR_TOPIC
 - `USER_*`: NOT_FOUND, RESTRICTED, BLOCKED, CHANGE_COOLDOWN, PROFILE_INCOMPLETE, ACCOUNT_DELETED, ACCOUNT_UNAVAILABLE
 - `REPORT_*`: ALREADY_REPORTED, SELF_REPORT
 - `MODERATION_*`: REASON_REQUIRED (moderator/admin action missing the mandatory reason field), ROLE_CHANGE_INVALID
-- `RATE_LIMIT_EXCEEDED`: user has hit the rate limit (HTTP 429). Response includes a `retryAfter` field (seconds). The `message` is a formatted Turkish string (e.g., "Çok sık işlem yapıyorsunuz. Lütfen X saniye sonra tekrar deneyin.") following the format rule in `.claude/rules/security.md`
+- `RATE_LIMIT_EXCEEDED`: user has hit the rate limit (HTTP 429). Response shape: `{ statusCode: 429, code: "RATE_LIMIT_EXCEEDED", message, retryAfter }`. The `message` is a formatted Turkish string that always shows the **largest non-zero unit pair** ("1 saat 15 dakika", "35 dakika", "45 saniye") — never zero-valued units like "0 saat 0 dakika". The authoritative format rule lives in `.claude/rules/security.md` → "Rate Limiting" section; every new rate-limited endpoint must reuse the same helper rather than inventing per-endpoint variants
 
 **`websocket-events.ts`** — WebSocket event names and payload types:
 - `vote:updated` → `{ topicId: string, voteCountRight: number, voteCountWrong: number }`
@@ -231,7 +236,8 @@ pnpm build
 
 # 4. Does the backend start?
 cd apps/api && pnpm start:dev
-# GET http://localhost:3001/api/v1/health → { status: "ok" }
+# GET http://localhost:3001/api/v1/health/live  → 200 { status: "ok" }
+# GET http://localhost:3001/api/v1/health/ready → 200 { status: "ok", checks: { database: "up", redis: "up" } }
 
 # 5. Does the frontend start?
 cd apps/web && pnpm dev
@@ -245,7 +251,7 @@ cd apps/web && pnpm dev
 - [ ] `pnpm install` completes without errors
 - [ ] `pnpm build` succeeds in all workspaces
 - [ ] `pnpm lint` passes without errors
-- [ ] Backend health endpoint returns `200 OK`
+- [ ] Backend `GET /api/v1/health/live` returns `200 OK` and `/health/ready` returns `200 OK` with `database` and `redis` both `"up"`
 - [ ] Frontend renders on localhost:3000
 - [ ] `@hakver/shared` can be imported from both apps
 - [ ] `.env` files are in `.gitignore` and not committed to the repo

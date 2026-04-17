@@ -66,7 +66,7 @@
 
 **Structure:**
 - Top: Category filters (horizontal scroll, chips: "Tümü", "Genel", "İlişkiler")
-- Sorting: "En Yeni" / "Popüler" / "Trend" tab or toggle. Default: "Trend" (time-weighted engagement score)
+- Sorting: "En Yeni" / "Popüler" / "Trend" / "Tartışmalı" tab or toggle. Default: "Trend" (time-weighted engagement score). "Tartışmalı" surfaces topics where the Hakli/Haksiz split is close to 50/50 and engagement is real — core Hakver identity move. Both "Trend" and "Tartışmalı" read the precomputed scores described in Phase 5 Section 10 so the listing stays cheap at scale
 - Topic card list (card grid or list view)
 
 **Topic card component** (`src/components/topic/topic-card.tsx`):
@@ -75,7 +75,7 @@
 - Author card (user-card or anonymous-card)
 - Category badge
 - Vote status: Haklı / Haksız buttons + counts (small version)
-- Comment count icon + count
+- Comment count icon + count — renders `commentCount` (level-1 comments only). Replies are not included so the number on the card always matches the top-level comment rows the user sees when they open the topic
 - Vote indicator: if authenticated, a small colored dot or icon showing the user's vote (green dot = Hakli, red dot = Haksiz, no dot = not voted). This comes from the `myVote` field in the topic list API response.
 - Image thumbnail (if available, first image)
 - Date (relative: "2 saat önce")
@@ -106,7 +106,8 @@
 - Category badge
 - Date + "düzenlendi" label (if applicable)
 - Update-note section (if `updateNote` is populated) — rendered below the original content as a visually distinct block titled "Güncelleme", showing the update text (Twemoji render) and the relative `updateNoteAt` timestamp
-- Action menu (if topic owner: Edit (within edit window), Güncelleme Ekle/Düzenle (any time — opens the update-note modal), Delete | everyone: Share, Report, Mute, Bookmark | moderator+: Pin/Unpin). If the topic is outside its edit window and the user is the author, "Edit" is hidden and only "Güncelleme Ekle/Düzenle" is shown
+- Action menu (if topic owner: Edit (within edit window), Güncelleme Ekle/Düzenle (any time — opens the update-note modal), Delete | non-author users: Takip Et / Takibi Bırak (toggles `TopicSubscription` so the user opts in to or out of `TOPIC_UPDATED` notifications; default state off), Share, Report, Mute, Bookmark | moderator+: Pin/Unpin). If the topic is outside its edit window and the user is the author, "Edit" is hidden and only "Güncelleme Ekle/Düzenle" is shown
+- Subscription hint: non-authors who have not yet subscribed see a small inline pill next to the action menu "Bu konuya güncelleme bildirimleri almıyorsunuz" with a "Takip Et" shortcut. Authors and existing subscribers see "Güncellemeler için aboneliğiniz açık" / "Kendi konunuza aboneliğiniz açık" respectively. The pill disappears after the user subscribes to keep the detail page uncluttered
 
 *Voting section:*
 - Two large buttons: "Haklı" (green tone) and "Haksız" (red tone)
@@ -125,6 +126,8 @@
 - @mention autocomplete: typing `@` shows dropdown with matching usernames (debounced 300ms). Selected username inserted as `@username`. Mentioned usernames rendered as highlighted links to user profiles.
 - Sorting: "En Beğenilen" / "En Yeni" toggle
 - Comment list (level 1 comments, replies under each)
+- **Focus comment handling (from notification click):** The page reads the `focusCommentId` query parameter on mount and forwards it to `useComments()` → `GET /topics/:topicId/comments?focusCommentId=...`. The server pins that comment to the top of the payload (Phase 7 Section 7). After the list renders, the page scrolls to the `#comment-{id}` anchor. When the user refreshes or navigates away and comes back without the query parameter, the list renders in the standard order. The query parameter is intentionally sticky — it is not stripped from the URL so the user can share the URL with the focus intent preserved
+- **Viewer-scoped own-comment pinning:** The comment list component reads the `isOwnComment` flag on each response row; within the highlight group the authenticated user's own comments float above the rest. This is per-viewer (other users see the normal order). The server already returns rows in this order for authenticated requests (Phase 7 Section 7 — "Viewer-scoped own-comment layer"), so the frontend only needs to render the order it receives
 
 ### 4. Create Topic Page (`/topics/create`)
 
@@ -147,6 +150,23 @@ Protected with auth guard.
 - "Paylaş" button
 
 **New user check:** If backend returns 403 → "Konu açabilmek için en az bir konuya oy vermeniz gerekiyor" warning + link to redirect to home page.
+
+**Draft auto-save (localStorage, user-scoped, 7-day TTL):**
+
+A stray refresh or an accidental navigation wipes 10 minutes of writing. The create form mitigates that with a local draft without introducing a server-side draft table.
+
+- Storage key: `topic-draft:{userId}` — scoped to the authenticated user's id so a shared browser does not leak drafts across accounts. Unauthenticated visitors have no draft slot (the page redirects to login before reaching the form)
+- Payload shape: `{ title, content, categoryId, isAnonymous, coverImageHint, updatedAt }`. Uploaded images are not persisted in localStorage (they already live in Cloudinary). `coverImageHint` stores the cover image's id so the preview reattaches when the user returns
+- Save trigger: debounced 1 second after the last keystroke on any controlled input. Also saves on `visibilitychange` (tab hides) and `beforeunload`
+- Restore trigger: on form mount, if a draft exists for the current user, show a subtle inline banner "Kaldığınız yerden devam edin" with two buttons `"Kaldığım yerden devam et"` / `"Yeni başla"`. Restore merges the draft into the form state; "Yeni başla" deletes the slot
+- Clear trigger: successful submit deletes the slot. Explicit cancel from the author also deletes after confirmation
+- TTL guard: on restore, if `updatedAt` is older than 7 days, the banner is suppressed and the slot is deleted silently — stale drafts never auto-populate
+- Payload size cap: the serialized draft is size-limited at 8 KB (roughly twice the max body length in characters); exceeding the limit drops the oldest writes first. This prevents pathological growth from stripping out the storage quota
+
+**Security hardening:**
+- Never persist any token, refresh cookie reference, or credential in the draft slot; only the raw content fields
+- On logout, `clearAuth()` in the auth store also sweeps every `topic-draft:*` key to remove authored drafts left behind by the user who signed out
+- The draft feature is strictly local to the device; Phase 12 settings do not surface it — the KVKK export already covers on-server data
 
 ### 5. Topic Editing
 
