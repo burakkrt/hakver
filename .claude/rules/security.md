@@ -9,8 +9,14 @@
 - Guard order on write endpoints: JWT → Verified → ProfileComplete → Restriction → Permission
 
 ## Rate Limiting
-- Rate limiting on auth, registration, email, file upload, and other sensitive endpoints
-- Rate-limit hits must return 429 with a Turkish user-facing message and a retry indicator; never silently drop requests
+- Rate limiting on auth, registration, email, file upload, voting, liking, and other sensitive endpoints
+- Rate-limit hits must return 429 with a Turkish user-facing `message` and a `retryAfter` seconds field; never silently drop requests
+- The 429 message is friendly, professional, and includes the remaining wait time. Format rule: use the **largest non-zero unit**; zero-valued units are never shown. Examples (quoted strings stay Turkish because they are user-facing):
+  - Hours remaining: "Çok sık işlem yapıyorsunuz. Lütfen **1 saat 15 dakika** sonra tekrar deneyin."
+  - Minutes only: "Çok sık işlem yapıyorsunuz. Lütfen **35 dakika** sonra tekrar deneyin."
+  - Seconds only: "Çok sık işlem yapıyorsunuz. Lütfen **45 saniye** sonra tekrar deneyin."
+  - When hours and minutes are both non-zero: "1 saat 15 dakika". When minutes are zero but hours remain: just "1 saat". When only seconds remain: "X saniye". Never render ugly forms like "0 saat 0 dakika"
+- Backend response shape: `{ statusCode: 429, code: "RATE_LIMIT_EXCEEDED", message: "<formatted Turkish text from above>", retryAfter: <seconds>, errors?: [] }`. The frontend may also drive its own countdown UI from `retryAfter` (optional)
 
 ## Input Validation & Sanitization
 - All input validated with a validation schema — both client and server

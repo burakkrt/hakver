@@ -52,6 +52,8 @@ On error → show error message via toast.
 - `useBlockedUsers()` → GET /users/me/blocked (query — list of users the current user has blocked)
 - `useRequestDataExport()` → POST /users/me/data-export (mutation — KVKK personal data export)
 - `useMyBookmarks()` → GET /users/me/bookmarks (query, paginated — bookmarked topics)
+- `useNotificationPreferences()` → GET /users/me/notification-preferences (query)
+- `useUpdateNotificationPreference()` → PATCH /users/me/notification-preferences (mutation, optimistic)
 
 ### 3. Register Page (`/register`)
 
@@ -183,7 +185,21 @@ Sections:
 - "Engeli Kaldır" button per user → calls `DELETE /users/:username/block`
 - Empty state: "Engellediğiniz kullanıcı yok"
 
-**Veri Dışa Aktarma (KVKK):**
+**Notification Preferences (L-2 — `#notifications` anchor):**
+- Section heading (Turkish, user-facing): "Bildirim Ayarları"
+- Description (user-facing): "Hangi bildirimleri almak istediğinizi seçin."
+- Toggle list (backed by the `UserNotificationPreference` table — `GET /users/me/notification-preferences`, `PATCH /users/me/notification-preferences`):
+  - **"Konunuza oy verildiğinde"** (`TOPIC_VOTED`) — toggle, default on
+  - **"Konunuza yorum yapıldığında"** (`TOPIC_COMMENTED`) — toggle, default on
+  - **"Yorumunuz beğenildiğinde"** (`COMMENT_LIKED`) — toggle, default on
+  - **"Yorumunuza yanıt verildiğinde"** (`COMMENT_REPLIED`) — toggle, default on
+  - **"Yorumunuz öne çıkarıldığında"** (`COMMENT_HIGHLIGHTED`) — toggle, default on
+  - **"Sizi biri etiketlediğinde"** (`MENTIONED`) — **non-toggleable** (disabled toggle with helper text "Kişisel sinyaller her zaman açıktır")
+  - **"İlgilendiğiniz konuya güncelleme eklendiğinde"** (`TOPIC_UPDATED`) — **non-toggleable** (disabled toggle, same helper text)
+- Changes save immediately using an optimistic update; on error the toggle reverts and an error toast is shown
+- 429 / 403 responses surface the formatted Turkish message defined in `.claude/rules/security.md`
+
+**Data Export (KVKK):**
 - "Verilerimi İndir" button
 - Clicking sends `POST /users/me/data-export` → success toast: "Verileriniz hazırlanıyor, email adresinize gönderilecek"
 - Disabled state with countdown if already requested within 7 days

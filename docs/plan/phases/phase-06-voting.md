@@ -118,11 +118,16 @@ Only the vote event is set up in this phase. Other events (comment, notification
 - If the topic author has blocked the voter → voting is blocked (topic returns 404 due to full blocking policy)
 - Full blocking means all interactions are prevented: the blocked user's content is completely invisible and inaccessible
 
+### 9. Rate Limiting (per-user)
+
+User-based rate limit on vote endpoints: **30 requests per minute per user** (sum of cast, change, and withdraw). Requests beyond the limit return 429. The error response follows the template defined in `.claude/rules/security.md` Rate Limiting — the `retryAfter` field carries the remaining wait time in seconds and the user-facing `message` is a professional Turkish string (e.g., "Çok sık işlem yapıyorsunuz. Lütfen X saniye sonra tekrar deneyin."). Wait-time formatting: show the largest non-zero unit pair (hour + minute, or minute only, or second only); never emit a zero-valued unit like "0 saat 0 dakika".
+
 ## Security Checklist
 - [ ] User cannot vote on their own topic
 - [ ] Cannot cast multiple votes on the same topic (unique constraint)
 - [ ] Counter update is atomic inside a transaction
-- [ ] Rate limiting is active (vote spam prevention)
+- [ ] Rate limiting is active (30/min per user — vote spam prevention)
+- [ ] 429 response carries a formatted Turkish message + `retryAfter`
 - [ ] WebSocket connection is authenticated (with JWT token)
 - [ ] Restriction check is active
 

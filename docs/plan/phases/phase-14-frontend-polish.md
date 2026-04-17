@@ -27,12 +27,19 @@
 
 ### 2. Notifications Page (`/notifications`)
 
-**Notification list:**
-- Unread notifications highlighted (background color)
-- Each notification: actor avatar/anonymous icon + message + date (relative) + read/unread status
-- Click → navigate to the referenced page (topic detail, etc.) + mark as read
-- "Tümünü okundu işaretle" button (top bar)
+**Notification list (flat chronological list with visual importance hierarchy):**
+- Single list — no tabs or grouping. Chronological order preserved (`updatedAt DESC`; aggregated cards sort by their latest actor's time)
+- Unread notifications get a highlighted background tint
+- **Important types** (`MENTIONED`, `COMMENT_HIGHLIGHTED`, `TOPIC_UPDATED`) are visually elevated: primary-tone vertical accent bar on the left edge of the card, primary-tone icon, and a soft background tint. Engagement types (`TOPIC_VOTED`, `TOPIC_COMMENTED`, `COMMENT_LIKED`, `COMMENT_REPLIED`) use the plain standard card style. The sort order stays chronological, but important cards catch the eye
+- **Aggregated card rendering:** when `aggregatedCount > 1`, the last 3 actor avatars stack horizontally with slight overlap and the headline shows "ayse_k ve {count-1} kullanıcı ...". For a single actor (`aggregatedCount === 1`) a single avatar + the standard message is shown
+- **Anonymous aggregate:** when the payload carries `isAnonymousAggregate: true`, a generic anonymous icon (mask) replaces the avatar and the headline becomes "Bir kullanıcı ..." or "12 kullanıcı ..." depending on count
+- **Stale notification (L-4):** cards with `isStale: true` render in grey/italic, avatar desaturated. Clicking does not navigate — a short info toast "Bu içerik artık mevcut değil" is shown instead. The card stays visible so the user keeps the history, but no actions are available
+- Each notification shows: actor avatar (or anonymous/stale variant) + message + relative date + read/unread status
+- Click → navigate to the referenced page (topic detail, etc.) + mark as read. For stale notifications navigation is skipped and the info toast is shown
+- "Tümünü okundu işaretle" button (top bar — user-facing Turkish label)
 - Infinite scroll
+
+**Notification preferences link:** a small "Bildirim Ayarları" button at the top of the page opens `/profile/settings#notifications` (L-2, Phase 12).
 
 **Notification message formats** (authoritative source is Phase 10; this list mirrors it for frontend reference):
 - TOPIC_VOTED: "[Actor] konunuza oy verdi" → /topics/:slug
@@ -105,7 +112,7 @@ export async function generateMetadata({ params }): Promise<Metadata> {
 ### 6. Social Media Sharing
 
 **`src/components/shared/share-button.tsx`**:
-- "Paylaş" button → dropdown: Twitter/X, Facebook, WhatsApp, Bağlantıyı Kopyala
+- "Paylaş" button → dropdown: Twitter/X, Facebook, WhatsApp, "Bağlantıyı Kopyala"
 - Generate share URL for each platform:
   - Twitter: `https://twitter.com/intent/tweet?url={url}&text={title}`
   - Facebook: `https://www.facebook.com/sharer/sharer.php?u={url}`

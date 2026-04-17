@@ -39,7 +39,7 @@
 - id: UUID
 - username: string
 - avatar: `{ url: string }`
-- rank: `{ name: string }` — rütbe adı (ör. "Aktif Üye")
+- rank: `{ name: string }` — the rank display name (e.g., "Jüri Üyesi")
 - totalXp: number
 - isDeletedAuthor: boolean — `true` when the referenced user is soft-deleted; frontend uses this to render an "Silinmiş Kullanıcı" styled anonymous card instead of the real username/avatar
 

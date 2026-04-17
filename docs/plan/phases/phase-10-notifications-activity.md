@@ -41,39 +41,48 @@ In `packages/shared/src/schemas/notification.ts`:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | /notifications | JWT | Notification list (paginated) |
+| GET | /notifications | JWT | Notification list (paginated, aggregated + stale flag dahil) |
 | GET | /notifications/unread-count | JWT | Unread notification count |
 | PATCH | /notifications/:id/read | JWT | Mark notification as read |
 | PATCH | /notifications/read-all | JWT | Mark all as read |
 | POST | /topics/:topicId/mute | JWT | Mute topic notifications |
 | DELETE | /topics/:topicId/mute | JWT | Unmute topic notifications |
+| GET | /users/me/notification-preferences | JWT | All notification types + their `enabled` status (missing rows default to enabled) |
+| PATCH | /users/me/notification-preferences | JWT | Update the `enabled` flag for a single type. Body: `{ type: NotificationType, enabled: boolean }`. Sending `MENTIONED` or `TOPIC_UPDATED` returns 400 with message "Bu bildirim türü devre dışı bırakılamaz" (non-toggleable personal signals) |
 
 ### 3. Notification Creation Service
 
-**`notification.service.ts`** — `createNotification(data)`:
+**`notification.service.ts`** — `createNotification(data)` (checks run in order; any negative check ends the call without creating a record):
 
-1. **Mute check:** Does a recipient-topic pair exist in the `NotificationMute` table? If yes → do not create notification
-2. **Self-notification prevention:** `actorId === userId` → do not create notification (e.g., liking own comment)
-3. **Block check:** Has the recipient blocked the actor? → do not create notification
-4. **Anonymous actor:** Notification is created but actor info is shown with an anonymous card
-5. Create `Notification` record
-6. Send in real-time via WebSocket
+1. **Recipient health check:** skip when `User.deletedAt IS NOT NULL` — soft-deleted accounts never receive notifications
+2. **Self-notification prevention:** `actorId === userId` → skip (e.g., liking own comment)
+3. **Block check:** skip if a `UserBlock` row exists between recipient and actor in **either direction**
+4. **Per-type preference check:** skip if `UserNotificationPreference(userId, type)` exists with `enabled=false`. Absent row means enabled by default. `MENTIONED` and `TOPIC_UPDATED` are non-toggleable on the backend — the preference check is bypassed for these two types
+5. **Mute check** (topic-based): skip if `NotificationMute(userId, topicId)` exists for the referenced topic. **Exception: `MENTIONED` bypasses this check** — @mention is a personal signal and punches through topic mute
+6. **Actor-target idempotency** (L-5): applies only to `TOPIC_VOTED` and `COMMENT_LIKED`. If the same `(userId=recipient, type, referenceId, actorId)` quadruple already has a record (read or unread) within the last 24 hours, **do not create a new record**; instead bump the existing record's `updatedAt`. This suppresses repeats across vote-withdraw-revote or like-unlike-like cycles
+7. **Aggregation check** (L-1): if `type ∈ { TOPIC_VOTED, TOPIC_COMMENTED, COMMENT_LIKED, COMMENT_REPLIED }`, look for an existing record with the same `(userId, type, referenceType, referenceId)`, `isRead=false`, and `updatedAt >= now() - 15min`:
+   - **Found:** append the new actor to `NotificationActor` (the `@@unique` constraint drops duplicate actor rows), `aggregatedCount += 1`, set `actorId` to the new actor, bump `updatedAt = now()`. Emit a `notification:updated` WebSocket event so the client refreshes the existing card in place (L-8: no new card inserted)
+   - **Not found:** fall through to step 8 and create a fresh record
+8. **Create a new record:** insert `Notification` (`aggregatedCount=1`, first actor row in `NotificationActor`). Emit `notification:new` WebSocket event
+9. **Anonymous actor** (L-9): when the actor acts anonymously (anonymous topic/comment author), aggregation is **mandatory** — a single anonymous actor never renders as a standalone identity card. Even one anonymous actor folds into the aggregated shape; the message format is always "Bir kullanıcı konunuza oy verdi" (single) or "N kullanıcı konunuza oy verdi" (multi), never the real anonymous display name like "Anonim Penguen #4521". This rule does **not** apply to `MENTIONED` (mention targets a specific user; the anonymous card is shown on that user's notification because the timing correlation risk is an accepted trade-off for explicit mentions). **Security note:** on `MENTIONED` notifications the anonymous actor's display name (e.g., "Anonim Penguen #4521") is returned only to the mentioned user; no other API response pairs this name with the comment. The frontend scrolls from the mention notification to the comment where the anonymous card is still rendered as anonymous — the real identity never leaks
+
+**Actor hydration** (L-6): the `actor` field in notification listings and WebSocket event payloads is **always** hydrated via `UserPublicCardSchema`. For soft-deleted actors the schema rule returns `isDeletedAuthor: true` and masks the card fields ("Silinmiş Kullanıcı" label, default "silinmis" avatar, rank omitted, `totalXp: 0`). Anonymous actors use `AnonymousCardSchema` (`displayName` + `iconType`). No code path leaks raw username / full name to the frontend.
 
 ### 4. Notification Triggers
 
 Add notification hooks to existing modules:
 
 **Vote Module:**
-- When a vote is cast → `TOPIC_VOTED` notification to topic owner
+- When a vote is cast → `TOPIC_VOTED` notification to topic owner. Aggregation applies (L-1); popular topics collapse into "ayse_k ve 14 kullanıcı konunuza oy verdi". Actor-target idempotency (L-5): vote-withdraw-revote cycle resolves to a single notification
 - On vote change → no new notification
-- On vote withdrawal → no new notification
+- On vote withdrawal → no new notification. The existing record is not deleted; idempotency ensures a subsequent re-vote does not repeat the notification
 
 **Comment Module:**
-- When a comment is posted → `TOPIC_COMMENTED` notification to topic owner
-- When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner
-- When a like is given → `COMMENT_LIKED` notification to comment owner
-- When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card if anonymous comment).
-- When the topic author highlights a comment (`PATCH /comments/:id/highlight`) → `COMMENT_HIGHLIGHTED` notification to the comment author. Skipped when the topic author highlights their own comment (self-notification prevention). Removing the highlight does not trigger a notification. Idempotent PATCH (re-highlighting an already-highlighted comment) does not produce a duplicate notification
+- When a comment is posted → `TOPIC_COMMENTED` notification to topic owner. Aggregation applies
+- When a reply is posted → `COMMENT_REPLIED` notification to parent comment owner. Aggregation applies
+- When a like is given → `COMMENT_LIKED` notification to comment owner. Aggregation + actor-target idempotency apply (like-unlike-like cycle resolves to a single notification)
+- When a user is @mentioned in a comment → `MENTIONED` notification to the mentioned user. Reference: the comment containing the mention. Actor: the comment author (or anonymous card for anonymous comments). **Aggregation does not apply** — each mention is a single notification. **Topic mute exception:** mention notifications are emitted even on muted topics (L-3)
+- When the topic author highlights a comment (`PATCH /comments/:id/highlight`) → `COMMENT_HIGHLIGHTED` notification to the comment author. Aggregation does not apply. Skipped when the topic author highlights their own comment (self-notification prevention). Removing the highlight does not trigger a notification. Idempotent PATCH (re-highlighting an already-highlighted comment) does not produce a duplicate notification
 
 **Topic Module:**
 - When the author writes or replaces an update note (`PATCH /topics/:id/update-note`) → `TOPIC_UPDATED` notifications are fanned out asynchronously via BullMQ. Clearing the update note does not trigger a notification.
@@ -105,38 +114,53 @@ Add notification hooks to existing modules:
   "data": [
     {
       "id": "...",
-      "type": "TOPIC_COMMENTED",
+      "type": "TOPIC_VOTED",
       "isRead": false,
+      "isStale": false,
       "createdAt": "...",
-      "actor": {
-        "id": "...",
-        "username": "testuser",
-        "avatar": { "url": "..." },
-        "rank": { "name": "Aktif Üye" },
-        "totalXp": 750,
-        "isDeletedAuthor": false
-      },
+      "updatedAt": "...",
+      "aggregatedCount": 15,
+      "actors": [
+        {
+          "id": "...",
+          "username": "ayse_k",
+          "avatar": { "url": "..." },
+          "rank": { "name": "Jüri Üyesi" },
+          "totalXp": 750,
+          "isDeletedAuthor": false
+        }
+      ],
       "reference": {
         "type": "TOPIC",
         "id": "...",
         "title": "Konu başlığı..."
       },
-      "message": "testuser konunuza yorum yaptı"
+      "message": "ayse_k ve 14 kullanıcı konunuza oy verdi"
     }
   ],
   "meta": { "total": 50, "page": 1, "limit": 20 }
 }
 ```
 
-**Anonymous actor** case:
+**`actors` field:** for an aggregated notification, the latest 3 actors (most recent `NotificationActor` rows) are returned hydrated via the card schema. If `aggregatedCount > 3`, the first 3 are shown and the rest is surfaced through the user-facing Turkish suffix "ve N diğer kullanıcı" inside the message. For single-actor notifications (`aggregatedCount === 1`) the `actors` array contains a single element.
+
+**`isStale` field** (L-4): during notification listing, if the `reference` target (topic or comment) is soft-deleted (`deletedAt IS NOT NULL`), the response flags `isStale: true`. The frontend renders the card grey/italic, disables navigation, or shows a toast "Bu içerik kaldırıldı" on click (details: Phase 14).
+
+**Anonymous actor — aggregation (L-9 security rule):** when the actor(s) are anonymous, the `actors` array is omitted; only a count is returned and the message is crafted to hide the anonymous identity:
 ```json
-"actor": {
-  "displayName": "Anonim Penguen #4521",
-  "iconType": "penguin"
+{
+  "type": "TOPIC_COMMENTED",
+  "aggregatedCount": 1,
+  "actors": [],
+  "isAnonymousAggregate": true,
+  "message": "Bir kullanıcı konunuza yorum yaptı"
 }
 ```
+When `aggregatedCount > 1` the message becomes "N kullanıcı konunuza yorum yaptı". This prevents leakage of a lone anonymous actor's display name (e.g., "Anonim Penguen #4521") through the notification channel — the anonymous card on the topic detail page still protects identity. **Exception: `MENTIONED`** — mention targets a specific person, so the anonymous card is shown inside the mention notification (accepted trade-off).
 
-**Notification messages** (in Turkish — user-facing):
+**Notification messages** (Turkish user-facing strings):
+
+Singular (`aggregatedCount === 1`):
 - `TOPIC_VOTED`: "{actor} konunuza oy verdi"
 - `TOPIC_COMMENTED`: "{actor} konunuza yorum yaptı"
 - `COMMENT_LIKED`: "{actor} yorumunuzu beğendi"
@@ -144,6 +168,16 @@ Add notification hooks to existing modules:
 - `MENTIONED`: "{actor} sizi bir yorumda etiketledi"
 - `TOPIC_UPDATED`: "{actor} ilgilendiğiniz konuya bir güncelleme ekledi"
 - `COMMENT_HIGHLIGHTED`: "{actor} yorumunuzu öne çıkardı"
+
+Aggregated (`aggregatedCount > 1`, only for the 4 aggregatable types):
+- `TOPIC_VOTED`: "{latest_actor} ve {count-1} kullanıcı konunuza oy verdi"
+- `TOPIC_COMMENTED`: "{latest_actor} ve {count-1} kullanıcı konunuza yorum yaptı"
+- `COMMENT_LIKED`: "{latest_actor} ve {count-1} kullanıcı yorumunuzu beğendi"
+- `COMMENT_REPLIED`: "{latest_actor} ve {count-1} kullanıcı yorumunuza yanıt verdi"
+
+Anonymous aggregate (all actors are anonymous):
+- Singular (count=1): "Bir kullanıcı konunuza oy verdi / yorum yaptı / ..."
+- Aggregated (count>1): "{count} kullanıcı konunuza oy verdi / ..."
 
 ### 6. WebSocket Notification Delivery
 

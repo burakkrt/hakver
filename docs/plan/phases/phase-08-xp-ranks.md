@@ -59,12 +59,14 @@ async withUserXpLock<T>(userId: string, callback: (tx) => Promise<T>): Promise<T
 Runs inside `withUserXpLock(userId, ...)`:
 
 1. Find the action from the `XpAction` table. If `isActive: false` → do not award XP
-2. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. If `dailyTotal + newXp > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit.
-3. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → check `XpLog` for existing positive entries with `(userId, action=COMMENT_CREATE)` and `metadata.topicId === currentTopicId`. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again. If a positive entry exists → do not award XP. The `metadata` JSON field stores `{ topicId }` to avoid joining the Comment table.
-4. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's **trimmed** character count less than 10? If yes → do not award XP. `trim()` prevents bypass via whitespace-only content.
-5. Create `XpLog` record (positive points, with `metadata` if provided — e.g., `{ topicId }` for comments, `{ voterId }` for TOPIC_VOTE_RECEIVED)
-6. Update `User.totalXp += points`
-7. **Rank check:** `checkAndUpdateRank(userId)`
+2. **Badge bonus hook (detailed design pending — see "Detailed Design Pending Items" in `plan.md`):** `applyUserBonuses(userId, action, basePoints)` reads the user's active badges from `UserBadge` and, for each badge whose `bonusEffect` is `XP_GAIN_MULTIPLIER` with a scope matching the current action, applies the percentage to `basePoints`. Multiple matching bonuses are **summed** (10% + 20% = 30%), not multiplied. At MVP launch this helper is in place as a placeholder; since the active badge catalog is minimal, it passes `basePoints` through unchanged for most users. The full bonus math is finalized in the separate badge design
+3. **Daily limit check (UTC):** Calculate the user's total XP earned today (`createdAt >= start of today in UTC`) from the `XpLog` table. All daily limit calculations use UTC timezone consistently. The daily cap check is applied to `adjustedPoints` (after bonus), because the limit should cap the user's real gain. If `dailyTotal + adjustedPoints > 1000` → do not award XP (skip silently, do not return error). **Note:** `ADMIN_ADJUST` actions are exempt from this limit
+4. **Single comment XP per topic check:** If action is `COMMENT_CREATE` → check `XpLog` for existing positive entries with `(userId, action=COMMENT_CREATE)` and `metadata.topicId === currentTopicId`. **Only count positive (non-revoked) XP entries.** If the user previously earned XP but it was revoked (comment deleted by author), they can earn XP again. If a positive entry exists → do not award XP. The `metadata` JSON field stores `{ topicId }` to avoid joining the Comment table
+5. **Minimum character check:** If action is `COMMENT_CREATE` → is the comment's **trimmed** character count less than 10? If yes → do not award XP. `trim()` prevents bypass via whitespace-only content
+6. Create `XpLog` record (`points: adjustedPoints`, with `metadata` — when a bonus was applied, include `{ ..., appliedBonuses: [{ badgeCode, percent }] }` so debug and reconciliation have full traceability)
+7. Update `User.totalXp += adjustedPoints`
+8. **Rank check:** `checkAndUpdateRank(userId)`
+9. **Badge earn check (detailed design pending):** call `BadgeService.checkAndAwardBadges(userId, event)` — did the user just cross a badge condition from this XP/action? If so, insert a `UserBadge` row and emit a badge-earned notification. The full details are defined when the badge catalog is finalized
 
 **`revokeXp(userId, action, referenceType, referenceId)`:**
 
@@ -127,7 +129,7 @@ Rank and XP are part of the `UserPublicCardSchema` defined in Phase 4. Every end
   "id": "...",
   "username": "...",
   "avatar": { "url": "..." },
-  "rank": { "name": "Aktif Üye" },
+  "rank": { "name": "Jüri Adayı" },
   "totalXp": 750,
   "isDeletedAuthor": false
 }
@@ -246,10 +248,13 @@ POST /comments/:id/like → like
 # Perform actions until reaching 1000 XP
 # Next action should not award XP
 
-# 8. Rank assignment
-# totalXp 0 → rank "Çaylak"
-# totalXp 100+ → rank "Üye"
-# totalXp 500+ → rank "Aktif Üye"
+# 8. Rank assignment (10-tier Justice theme, see Phase 2 seed)
+# totalXp 0 → rank "Yeni Vatandaş"
+# totalXp 100+ → rank "Gözlemci"
+# totalXp 300+ → rank "Tanık"
+# totalXp 1750+ → rank "Jüri Üyesi"
+# totalXp 8500+ → rank "Hakem"
+# totalXp 70000+ → rank "Adalet Bilgesi"
 
 # 9. Is rank visible in responses?
 GET /users/:username → is rank info present?

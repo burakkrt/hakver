@@ -276,10 +276,41 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | id | UUID | PK |
 | userId | FK → User | index (recipient) |
 | type | NotificationType enum | |
-| actorId | FK → User | the user who triggered the notification |
+| actorId | FK → User | the **latest** actor that triggered/updated this notification (for aggregation, this is the most recent contributor). Nullable for system notifications |
 | referenceType | ReferenceType enum | |
 | referenceId | UUID | |
 | isRead | Boolean | default false |
+| aggregatedCount | Int | default 1 — total number of aggregated actors (grows as new same-type-same-target actions fold into this record) |
+| updatedAt | DateTime | last time a new actor aggregated into this notification; used for sorting/dedup window checks |
+
+**Aggregation policy:**
+- When a new `TOPIC_VOTED`, `TOPIC_COMMENTED`, `COMMENT_LIKED`, or `COMMENT_REPLIED` notification is about to be created, first look for an existing UNREAD (`isRead=false`) record with the same `(userId, type, referenceType, referenceId)` and `updatedAt >= now() - 15min`. If found, append the new actor to `NotificationActor`, increment `aggregatedCount`, set `actorId` to the new actor, and bump `updatedAt`. Otherwise, create a fresh record
+- `MENTIONED`, `TOPIC_UPDATED`, `COMMENT_HIGHLIGHTED` always create a single record — no aggregation
+- Actor-target idempotency: within the same 24h window, the same `(userId, type, referenceId, actorId)` must not create a second record (prevents vote → withdraw → vote re-notifications). If an earlier notification from the same actor on the same target exists, reuse it (bump `updatedAt`) instead of creating a new record
+
+#### NotificationActor
+Junction table storing the last N actors aggregated into a notification. UI shows the most recent 3 actors by username followed by the Turkish suffix "ve N diğer kullanıcı" (user-facing copy stays in Turkish).
+
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| notificationId | FK → Notification | index |
+| actorId | FK → User | |
+| createdAt | DateTime | default now |
+| | | @@unique([notificationId, actorId]) — same actor counted once per notification |
+
+#### UserNotificationPreference
+Per-user, per-type toggles. Missing row = default enabled.
+
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| userId | FK → User | index |
+| type | NotificationType enum | |
+| enabled | Boolean | default true |
+| | | @@unique([userId, type]) |
+
+`MENTIONED` and `TOPIC_UPDATED` are marked non-toggleable on the backend (personal signals); the settings UI hides the toggle for these two types.
 
 #### TopicBookmark
 | Field | Type | Constraint |
@@ -328,6 +359,33 @@ Create all the following tables. Every table has `createdAt` and `updatedAt` fie
 | acceptedAt | DateTime | default now |
 | ipAddress | String? | |
 
+#### Badge (badge definition)
+Comprehensive, tiered badge system. The base tables live here; the full badge catalog and the XP bonus / advantage semantics tied to some badges are finalized in a **separate design document** (see "Detailed Design Pending Items" in `plan.md`).
+
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| code | String | unique — program-readable identifier (e.g., `loyal_bronze`, `loyal_silver`, `vote_master_gold`) |
+| name | String | Turkish user-facing display name (e.g., "Sadık", "Oy Ustası") |
+| description | String | max 500 — Turkish description shown when the badge is awarded or displayed on the profile |
+| icon | String | icon identifier (Lucide name or custom SVG key) |
+| tier | String? | null = tierless single badge. Otherwise: BRONZE / SILVER / GOLD |
+| group | String? | groups a tiered chain under one code (e.g., `loyal` aggregates all "Sadık" tiers) |
+| conditionType | String | action type (TOPIC_CREATE, VOTE_CREATE, COMMENT_LIKE_RECEIVED, STREAK_DAYS, XP_THRESHOLD, MANUAL, …) |
+| conditionValue | Int | threshold value (e.g., 100 votes) |
+| bonusEffect | Json? | **Pending design — placeholder field.** Carries the bonus semantics for badges that grant an XP gain percentage or other advantage. Example shape: `{ type: "XP_GAIN_MULTIPLIER", scope: "VOTE_CREATE", percent: 10 }`. Stored as JSON so that the full catalog and effect semantics can be finalized in the separate design before launch without a schema migration |
+| sortOrder | Int | UI ordering |
+| isActive | Boolean | default true |
+
+#### UserBadge (badges awarded to a user)
+| Field | Type | Constraint |
+|-------|------|-----------|
+| id | UUID | PK |
+| userId | FK → User | index |
+| badgeId | FK → Badge | |
+| awardedAt | DateTime | default now |
+| | | @@unique([userId, badgeId]) — the same badge is never awarded twice to the same user |
+
 ### 4. Indexes
 
 Additional indexes for performance:
@@ -339,8 +397,13 @@ Additional indexes for performance:
 - `XpLog`: `(userId, createdAt)` — daily XP calculation
 - `ActivityLog`: `(userId, createdAt DESC)` — activity queries
 - `Notification`: `(userId, isRead, createdAt DESC)` — unread notifications
+- `Notification`: `(userId, type, referenceType, referenceId, isRead)` — aggregation lookup (find existing unread same-target record within 15min window)
+- `NotificationActor`: `(notificationId, createdAt DESC)` — render last actors in UI
+- `UserNotificationPreference`: `(userId, type)` — unique, preference lookup
 - `UserRestriction`: `(userId, expiresAt)` — active restriction check
 - `UserBlock`: `(blockedId)` — reverse block lookup for symmetric block checks
+- `Badge`: `(group, tier)` — tier chain queries
+- `UserBadge`: `(userId, awardedAt DESC)` — profile badge listing
 
 ### 4.1. Search Index (pg_trgm)
 
@@ -390,13 +453,19 @@ Under `apps/api/src/prisma/`:
 - TOPIC_VOTE_RECEIVED: 1 point
 - ADMIN_ADJUST: 0 points (actual points are set per request by admin — this action is exempt from daily XP limits)
 
-**Ranks:**
-- Çaylak: 0 XP
-- Üye: 100 XP
-- Aktif Üye: 500 XP
-- Deneyimli: 1500 XP
-- Uzman: 5000 XP
-- Usta: 15000 XP
+**Ranks (10 tiers, Justice / Jury theme — Turkish display names):**
+- Yeni Vatandaş: 0 XP
+- Gözlemci: 100 XP
+- Tanık: 300 XP
+- Jüri Adayı: 750 XP
+- Jüri Üyesi: 1750 XP
+- Kıdemli Jüri: 4000 XP
+- Hakem: 8500 XP
+- Bilirkişi: 17500 XP
+- Yargıç: 35000 XP
+- Adalet Bilgesi: 70000 XP
+
+Progression: each tier is roughly 2–2.3x the previous threshold. Early tiers reward quickly to motivate new users; upper tiers act as long-term prestige. The top tier (70k XP) is aimed at the top ~1% of users. The curve is slightly steeper than the original 5x step because the user asked for 10 tiers instead of 6; overall gradient stays close to ~2.2x per tier.
 
 **Restriction Categories and Reasons:**
 - Uygunsuz İçerik → "Hakaret veya küfür içeren paylaşım", "Şiddete teşvik eden içerik", "Cinsel içerikli paylaşım"
@@ -414,6 +483,15 @@ Each should be written in a professional and formal tone (in Turkish). They shou
 - email: from environment variable or default
 - username: admin
 - role: ADMIN
+
+**Badge seed (placeholder — detailed design pending):**
+
+The badge system is part of the MVP per the user's decision. A comprehensive + tiered structure, together with XP gain bonuses on certain badges, is planned. The full catalog (name, condition, tier thresholds, bonus effects) is finalized in a **separate design document**. For the seed stage:
+
+- Starter milestone badges (Bronze tier only) are included in the seed: "Hoş Geldin" (email verification), "İlk Oy", "İlk Konu", "İlk Yorum" — `conditionType: MANUAL` or the matching action + `conditionValue: 1`, `bonusEffect: null`
+- The full tiered badge catalog (Sadık Bronze/Silver/Gold, Oy Ustası, Halk Kahramanı, etc.) and XP bonus effects will be added via a separate design document + PR before launch. This placeholder keeps the schema exercised and provides enough badges for MVP smoke tests
+
+**`UserNotificationPreference` seed defaults:** The table is empty when a user registers (absent row = default enabled). The registration flow does not insert preference rows; the first toggle on the settings page creates the row on demand.
 
 ## Security Checklist
 - [ ] Soft delete middleware is active and working correctly

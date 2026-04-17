@@ -152,6 +152,7 @@ packages/shared/
 - `USER_*`: NOT_FOUND, RESTRICTED, BLOCKED, CHANGE_COOLDOWN, PROFILE_INCOMPLETE, ACCOUNT_DELETED, ACCOUNT_UNAVAILABLE
 - `REPORT_*`: ALREADY_REPORTED, SELF_REPORT
 - `MODERATION_*`: REASON_REQUIRED (moderator/admin action missing the mandatory reason field), ROLE_CHANGE_INVALID
+- `RATE_LIMIT_EXCEEDED`: user has hit the rate limit (HTTP 429). Response includes a `retryAfter` field (seconds). The `message` is a formatted Turkish string (e.g., "Çok sık işlem yapıyorsunuz. Lütfen X saniye sonra tekrar deneyin.") following the format rule in `.claude/rules/security.md`
 
 **`websocket-events.ts`** — WebSocket event names and payload types:
 - `vote:updated` → `{ topicId: string, voteCountRight: number, voteCountWrong: number }`

@@ -155,6 +155,8 @@ The topic author can mark any comment on their topic as "öne çıkarılan" (hig
 2. Delete like record (hard delete)
 3. `comment.likeCount -= 1` (transaction)
 
+**Rate limiting (per-user):** Like endpoints (like + unlike combined) are capped at **60 requests per minute per user**. Requests beyond the limit return 429 using the shared template defined in `.claude/rules/security.md` Rate Limiting — Turkish user-facing `message`, `retryAfter` in seconds, and the wait-time formatting rule (largest non-zero unit, never "0 saat 0 dakika"). Example message: "Çok sık işlem yapıyorsunuz. Lütfen 45 saniye sonra tekrar deneyin."
+
 ### 7. Comment Listing
 
 `GET /topics/:topicId/comments`:
